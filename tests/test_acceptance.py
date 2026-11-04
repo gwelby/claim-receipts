@@ -1,0 +1,71 @@
+"""Score Receipts against the sealed acceptance set.
+
+Development tests, not validation: the engine's author has read these cases. The public claim rests
+on a held-out set written by someone else, which does not exist yet.
+
+Pass bar (agreed): 7/8 verdicts, BOTH positive controls BACKED (#6 honest hedge, #8 fully backed),
+and no case where honest work is called CONTRADICTED.
+"""
+import json
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from receipts.evidence import Evidence      # noqa: E402
+from receipts.judge import extract_claims, judge  # noqa: E402
+
+FIX = ROOT / "fixtures" / "acceptance.json"
+
+
+def run(verbose=True):
+    data = json.loads(FIX.read_text())
+    rows, hits = [], 0
+    for case in data["cases"]:
+        claims = extract_claims(case["claim_text"])
+        ev = Evidence.from_fixture(case)
+        expected = case["expect"]
+
+        if not claims:
+            rows.append((case, None, expected, "MISS-DETECTION"))
+            continue
+        claim = claims[0]
+        if case.get("subject"):
+            claim.subject = case["subject"]          # subject resolution is out of scope here
+        scope = case.get("scope") or {}
+        v = judge(claim, ev, claimed_count=scope.get("claimed"),
+                  evidence_count=scope.get("evidence"))
+        got = v.verdict
+        ok = got == expected["verdict"]
+        hits += 1 if ok else 0
+        rows.append((case, v, expected, "PASS" if ok else "MISS"))
+
+    if verbose:
+        for case, v, expected, state in rows:
+            mark = {"PASS": "PASS", "MISS": "MISS", "MISS-DETECTION": "NO-CLAIM"}[state]
+            got = f"{v.verdict}/{v.reason}" if v else "(no claim detected)"
+            print(f"  [{mark:8}] {case['id']}  {case['name'][:52]}")
+            print(f"             expected {expected['verdict']}/{expected['reason']}")
+            print(f"             got      {got}")
+            if v and v.detail:
+                print(f"             detail   {v.detail[:78]}")
+            if case.get("known_gap"):
+                print(f"             KNOWN GAP {case['known_gap'][:70]}")
+
+        total = len(rows)
+        print(f"\n  score: {hits}/{total}")
+        positives = [r for r in rows if "POSITIVE CONTROL" in r[0]["name"]]
+        pos_ok = all(r[1] is not None and r[1].verdict == r[2]["verdict"] for r in positives)
+        contradict_honest = [r for r in rows
+                             if r[1] and r[1].verdict == "CONTRADICTED"
+                             and "POSITIVE CONTROL" in r[0]["name"]]
+        print(f"  positive controls BACKED: {pos_ok}")
+        print(f"  honest work wrongly CONTRADICTED: {len(contradict_honest)}")
+        print(f"  bar met: {hits >= 7 and pos_ok and not contradict_honest}")
+    return hits, len(rows)
+
+
+if __name__ == "__main__":
+    hits, total = run()
+    sys.exit(0 if hits >= 7 else 1)
