@@ -1,0 +1,19 @@
+name: receipts
+version: "0.1.0"
+description: "Proof of work for agent sessions. Records every file a session actually changed and every command it actually ran, then reconciles the session's claims against that evidence at exit. Three verdicts per claim: backed, unbacked, unverifiable. Local-only, no network, fail-open."
+author: "Greg Welby and Hermes"
+license: "MIT"
+requires_hermes: ">=0.21.5"
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - on_session_end
+capabilities:
+  hooks:
+    - pre_tool_call
+    - post_tool_call
+    - on_session_end
+  commands:
+    - receipts
+  tools: []
+  env: []
