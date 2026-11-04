@@ -167,7 +167,7 @@
     },
     {
       "id": "case-07",
-      "name": "KNOWN GAP \u2014 claim about an output property vs a measurement taken in-session",
+      "name": "claim about an output property vs a measurement taken in-session",
       "origin": "agent said a colour treatment was full-page; a pixel measure in the same session showed ~53% of the page with white margins",
       "claim_text": "The cream treatment is full-page.",
       "subject": "/artifacts/builds/build_v3/page.png",
@@ -189,7 +189,14 @@
         "verdict": "CONTRADICTED",
         "reason": "measurement-disagrees"
       },
-      "known_gap": "The engine does not yet interpret a measurement's OUTPUT, only that a command ran. Expected to miss until tool output is captured."
+      "tool_outputs": [
+        {
+          "command": "python3 measure_margins.py /artifacts/builds/build_v3/page.png",
+          "output": "page 600x900; ink bbox 600x477; coverage 53.0%; margins top=0 bottom=423",
+          "tool": "terminal"
+        }
+      ],
+      "known_gap_removed": "closed 2026-11-04 by reading the host transcript instead of storing a digest"
     },
     {
       "id": "case-08",
@@ -229,5 +236,7 @@
         "reason": "written-this-session"
       }
     }
-  ]
+  ],
+  "revision": 2,
+  "revision_note": "rev 1 sha256 3ccd9b30877325d2edb093228d01e72b4dbdf8a5fed4b38c39d76f3b68a188d3. rev 2 adds case-07's measurement output (the gap it encoded was closed by reading the host transcript) and corrects case-07's title. Expected verdicts are UNCHANGED \u2014 no case was re-scored to make the engine pass."
 }

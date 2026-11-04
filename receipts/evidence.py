@@ -37,6 +37,8 @@ _FLAGS = re.compile(r"^-{1,2}[A-Za-z0-9_-]+$")
 
 
 def _paths_in(args: str) -> list[str]:
+    """Absolute paths only. A relative path in a listing command is relative to a CWD we never
+    recorded, and pretending otherwise is how "." came to mean everywhere."""
     out = []
     for tok in re.split(r"\s+", args.strip()):
         tok = tok.strip("'\"")
@@ -44,7 +46,7 @@ def _paths_in(args: str) -> list[str]:
             continue
         if tok.startswith("-"):
             continue
-        if os.sep in tok or tok.startswith("."):
+        if os.path.isabs(tok):
             out.append(os.path.normpath(tok))
     return out
 
@@ -58,12 +60,17 @@ class Listing:
     def covers(self, path: str) -> bool:
         """Was <path> inside the scope this listing looked at?
 
-        Prefix comparison on normalised paths, with a separator guard so /a/bc is not "inside" /a/b.
+        Only an ABSOLUTE root can licence anything. A relative root means the command's working
+        directory at that moment, which the ledger does not record — so it covers nothing. Treating
+        "." as "everywhere" produced three false CONTRADICTED verdicts on a real session
+        ("absent inside ."), which is the worst failure this plugin can have.
         """
-        root = os.path.normpath(self.root or "/")
+        root = os.path.normpath(self.root or "")
         target = os.path.normpath(path or "")
-        if root in ("/", "."):
+        if root == os.sep:
             return True
+        if not os.path.isabs(root):
+            return False
         return target == root or target.startswith(root + os.sep)
 
 
@@ -73,6 +80,10 @@ class Evidence:
     listings: list[Listing] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)     # every command, in order
     failed_commands: list[str] = field(default_factory=list)  # those that did not return ok
+    # Tool OUTPUT, read from the host's transcript at session end — never copied into our own store.
+    # A digest we wrote would be a second place for secrets to land; this is a read of what the host
+    # already keeps.
+    tool_outputs: list[dict] = field(default_factory=list)    # {command|tool, output}
     # Optional filesystem view, for fixtures. When None, real stat() is used.
     fs: dict[str, dict] | None = None
 
@@ -160,9 +171,62 @@ class Evidence:
                     ev.listings.append(Listing(root=root, command=cmd.strip()[:200]))
         return ev
 
+    def measured_fractions(self) -> list[tuple[float, str]]:
+        """Coverage measurements the session actually took, as 0..1 fractions.
+
+        Deliberately narrow. A first version took ANY percentage in ANY tool output and produced a
+        false CONTRADICTED against a real session by reading a "Loading weights: 0%" progress bar.
+        Percentages are everywhere: progress bars, memory use, CI pass rates, and the text of files
+        the session merely read. So a line qualifies only if it looks like a MEASUREMENT of extent —
+        it must name what was measured — and not like a progress render.
+        """
+        import re as _re
+        MEASURE_WORDS = _re.compile(
+            r"\b(coverage|ink|bbox|margins?|dpi|filled|whitespace|white space|area|"
+            r"page ?fill|occupied|bleed)\b", _re.I)
+        PROGRESS = _re.compile(r"(\d+%\||\|[#=]+\||it/s|Loading|\bETA\b|^\s*\d+%\s*$)", _re.I)
+        PCT = _re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+        out = []
+        for item in self.tool_outputs:
+            if (item.get("tool") or "").lower() in ("read_file", "write_file", "patch"):
+                continue          # file BODIES are not measurements — this read its own fixtures back
+            for line in (item.get("output") or "").splitlines():
+                if PROGRESS.search(line) or not MEASURE_WORDS.search(line):
+                    continue
+                if any(ch in line for ch in '{}"') or "\"output\":" in line or "|" in line:
+                    continue      # quoted/report text, not a measurement
+                for m in PCT.finditer(line):
+                    try:
+                        val = float(m.group(1)) / 100.0
+                    except ValueError:
+                        continue
+                    if 0.0 <= val <= 1.0:
+                        out.append((val, line.strip()[:100]))
+        return out
+
+    @classmethod
+    def from_session(cls, session_id: str, records: Iterable[dict] | None = None,
+                     db_path: str | None = None) -> "Evidence":
+        """Evidence for a REAL session: ledger for what changed, transcript for what was printed.
+
+        The transcript read is bounded and fails open — an unreadable store yields no output, which
+        produces UNVERIFIABLE rather than a confident wrong answer.
+        """
+        ev = cls.from_ledger(records or [])
+        try:
+            from . import transcript
+            ev.tool_outputs = transcript.read_tool_outputs(session_id, db_path)
+        except Exception:
+            ev.tool_outputs = []
+        return ev
+
     @classmethod
     def from_fixture(cls, data: dict) -> "Evidence":
         ev = cls(fs={os.path.normpath(k): v for k, v in (data.get("filesystem") or {}).items()})
+        for item in data.get("tool_outputs") or []:
+            ev.tool_outputs.append({"command": item.get("command"),
+                                    "output": item.get("output") or "",
+                                    "tool": item.get("tool") or ""})
         for rec in data.get("ledger") or []:
             for mut in rec.get("mutations") or []:
                 p = mut.get("path")
