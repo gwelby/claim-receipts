@@ -1,13 +1,19 @@
 PY ?= python3
+PYFLAGS ?= -B
 
-.PHONY: test validate acceptance all
+.PHONY: test acceptance validate all
+
 all: test acceptance validate
 
+# Every tests/test_*.py except the acceptance scorer, which needs its own target.
 test:
-	$(PY) tests/test_ledger.py
+	@for f in tests/test_*.py; do \
+	  case "$$f" in *acceptance*) continue;; esac; \
+	  $(PY) $(PYFLAGS) "$$f" || exit 1; \
+	done
 
 acceptance:
-	$(PY) tests/test_acceptance.py
+	$(PY) $(PYFLAGS) tests/test_acceptance.py
 
 validate:
 	hermes plugins validate .
