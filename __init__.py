@@ -36,10 +36,24 @@ def _handle_slash(raw_args: str = "") -> str:
         return f"receipts: could not read the ledger ({exc})"
 
 
+def _session_end(session_id: str = "", task_id: str = "", **kwargs: Any) -> None:
+    """Boundary marker first, then the artifact. Two steps, both fail-open and independent: a failure
+    writing the receipt must not cost the ledger its end marker, and vice versa."""
+    try:
+        ledger.on_session_end(session_id=session_id, task_id=task_id, **kwargs)
+    except Exception:
+        pass
+    try:
+        from .receipts import receipt
+        receipt.write(session_id, task_id)
+    except Exception:
+        pass
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", _safe(ledger.pre_tool_call, "pre_tool_call"))
     ctx.register_hook("post_tool_call", _safe(ledger.post_tool_call, "post_tool_call"))
-    ctx.register_hook("on_session_end", _safe(ledger.on_session_end, "on_session_end"))
+    ctx.register_hook("on_session_end", _safe(_session_end, "on_session_end"))
     ctx.register_command(
         "receipts",
         handler=_handle_slash,

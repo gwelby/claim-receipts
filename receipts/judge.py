@@ -23,10 +23,14 @@ from .evidence import Evidence
 
 # ----------------------------------------------------------------------------- claim shapes
 
+# Hedges are limited to statements about VERIFICATION — that is what the evidence can speak to.
+# "I don't know what it would be yet" is a statement about the speaker, not about the record; scoring
+# it BACKED inflated the good number by 15 on one session, which is the flattering direction and the
+# one direction a receipt must never be wrong in.
 HEDGE = re.compile(
     r"\b(could ?n[o']t confirm|could not confirm|cannot confirm|can'?t confirm|unable to confirm|"
-    r"could ?n[o']t verify|cannot verify|not sure|don'?t know|do not know|no information|"
-    r"unverified|uncertain)\b", re.I)
+    r"could ?n[o']t verify|cannot verify|unable to verify|not verified|unverified|no information)\b",
+    re.I)
 
 ABSENCE = re.compile(
     r"\b(does ?n[o']t exist|does not exist|did ?n[o']t exist|never existed|no such file|"
@@ -53,7 +57,10 @@ COVERAGE = re.compile(
     r"\b(full[- ]page|full[- ]bleed|edge[- ]to[- ]edge|entire (?:page|surface)|"
     r"100\s*% of the page|fills the page)\b", re.I)
 
-PATHISH = re.compile(r"((?:/[\w.\-]+){2,}|[\w.\-]+\.(?:md|py|pdf|json|txt|png|csv|db|yaml|yml))")
+# The leading lookbehind matters: without it, "src/models/dory.cpp" yields a "match" of
+# "/models/dory.cpp", which then reads as an ABSOLUTE path that does not exist — a false
+# accusation against a file that was verified on another machine.
+PATHISH = re.compile(r"(?<![\w.\-/])((?:/[\w.\-]+){2,}|[\w.\-]+\.(?:md|py|pdf|json|txt|png|csv|db|yaml|yml))")
 TOKENISH = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\d*\b")     # PROOF2, S15, D01
 
 
