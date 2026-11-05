@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+
+# build output: a bundle of this repo inside the repo would be circular
+GATE_PACKAGE/
