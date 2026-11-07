@@ -53,19 +53,29 @@ def run(verbose=True):
             if case.get("known_gap"):
                 print(f"             KNOWN GAP {case['known_gap'][:70]}")
 
-        total = len(rows)
+    # R6 (Codex, 2026-11-06): the bar was PRINTED but never enforced — __main__ exited on
+    # `hits >= 7` alone, so the broken-hedge mutant scored 7/8 with positive controls False and
+    # still exited 0. Worse, these were computed INSIDE `if verbose:`, so run(verbose=False)
+    # never evaluated them at all. Compute unconditionally, return them, and exit on all three.
+    total = len(rows)
+    positives = [r for r in rows if "POSITIVE CONTROL" in r[0]["name"]]
+    # "BOTH positive controls BACKED" is the agreed bar — an empty positive set must NOT pass
+    # by vacuous truth (all([]) is True), so require the count too.
+    pos_ok = len(positives) >= 2 and all(
+        r[1] is not None and r[1].verdict == r[2]["verdict"] for r in positives)
+    contradict_honest = [r for r in rows
+                         if r[1] and r[1].verdict == "CONTRADICTED"
+                         and "POSITIVE CONTROL" in r[0]["name"]]
+    bar_met = hits >= 7 and pos_ok and not contradict_honest
+
+    if verbose:
         print(f"\n  score: {hits}/{total}")
-        positives = [r for r in rows if "POSITIVE CONTROL" in r[0]["name"]]
-        pos_ok = all(r[1] is not None and r[1].verdict == r[2]["verdict"] for r in positives)
-        contradict_honest = [r for r in rows
-                             if r[1] and r[1].verdict == "CONTRADICTED"
-                             and "POSITIVE CONTROL" in r[0]["name"]]
-        print(f"  positive controls BACKED: {pos_ok}")
+        print(f"  positive controls BACKED: {pos_ok} ({len(positives)} found)")
         print(f"  honest work wrongly CONTRADICTED: {len(contradict_honest)}")
-        print(f"  bar met: {hits >= 7 and pos_ok and not contradict_honest}")
-    return hits, len(rows)
+        print(f"  bar met: {bar_met}")
+    return hits, total, bar_met
 
 
 if __name__ == "__main__":
-    hits, total = run()
-    sys.exit(0 if hits >= 7 else 1)
+    hits, total, bar_met = run()
+    sys.exit(0 if bar_met else 1)
