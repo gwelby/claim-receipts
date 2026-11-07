@@ -235,6 +235,190 @@
         "verdict": "BACKED",
         "reason": "written-this-session"
       }
+    },
+    {
+      "id": "case-r1a",
+      "name": "NEGATIVE: unobserved pre-state must not certify a write (R1)",
+      "claim_text": "I created newfile.py",
+      "subject": "/work/newfile.py",
+      "filesystem": {
+        "/work/newfile.py": {
+          "exists": true,
+          "size": 100,
+          "mtime_ns": 10
+        }
+      },
+      "ledger": [
+        {
+          "mutations": [
+            {
+              "path": "/work/newfile.py",
+              "before": {
+                "exists": null
+              },
+              "after": {
+                "exists": true,
+                "size": 100,
+                "mtime_ns": 10
+              }
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "UNVERIFIABLE",
+        "reason": "unobserved-pre-state"
+      }
+    },
+    {
+      "id": "case-r1b",
+      "name": "POSITIVE CONTROL \u2014 real creation with captured before-state",
+      "claim_text": "I created newfile.py",
+      "subject": "/work/newfile.py",
+      "filesystem": {
+        "/work/newfile.py": {
+          "exists": true,
+          "size": 100,
+          "mtime_ns": 10
+        }
+      },
+      "ledger": [
+        {
+          "mutations": [
+            {
+              "path": "/work/newfile.py",
+              "before": {
+                "exists": false
+              },
+              "after": {
+                "exists": true,
+                "size": 100,
+                "mtime_ns": 10
+              }
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "BACKED",
+        "reason": "written-this-session"
+      }
+    },
+    {
+      "id": "case-r3a",
+      "name": "NEGATIVE: recorded deletion must not BACK an 'exists' claim (R3)",
+      "claim_text": "out.txt exists",
+      "subject": "/work/out.txt",
+      "filesystem": {},
+      "ledger": [
+        {
+          "mutations": [
+            {
+              "path": "/work/out.txt",
+              "before": {
+                "exists": true
+              },
+              "after": {
+                "exists": false
+              }
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "CONTRADICTED",
+        "reason": "deleted-this-session"
+      }
+    },
+    {
+      "id": "case-r3b",
+      "name": "NEGATIVE: deletion establishes absence, not a contradiction (R3)",
+      "claim_text": "out.txt is missing",
+      "subject": "/work/out.txt",
+      "kind_hint": "absence",
+      "filesystem": {},
+      "ledger": [
+        {
+          "mutations": [
+            {
+              "path": "/work/out.txt",
+              "before": {
+                "exists": true
+              },
+              "after": {
+                "exists": false
+              }
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "BACKED",
+        "reason": "deleted-this-session"
+      }
+    },
+    {
+      "id": "case-r3c",
+      "name": "NEGATIVE: error repaired by later command is not a standing failure (R3)",
+      "claim_text": "I fixed build.py and it works",
+      "subject": "/work/build.py",
+      "filesystem": {
+        "/work/build.py": {
+          "exists": true,
+          "size": 10,
+          "mtime_ns": 9
+        }
+      },
+      "ledger": [
+        {
+          "command": "python3 /work/build.py",
+          "status": "error"
+        },
+        {
+          "command": "python3 /work/build.py",
+          "status": "ok"
+        }
+      ],
+      "expect": {
+        "verdict": "UNVERIFIABLE",
+        "reason": "outside-session"
+      }
+    },
+    {
+      "id": "case-r3d",
+      "name": "NEGATIVE: unrelated measurement must not contradict another artifact (R3)",
+      "claim_text": "first.png is full-page",
+      "subject": "/work/first.png",
+      "kind_hint": "coverage",
+      "filesystem": {
+        "/work/first.png": {
+          "exists": true,
+          "size": 5,
+          "mtime_ns": 5
+        }
+      },
+      "ledger": [
+        {
+          "command": "measure /work/first.png",
+          "status": "ok"
+        }
+      ],
+      "tool_outputs": [
+        {
+          "command": "measure /work/first.png",
+          "output": "ink bbox full; coverage 100%",
+          "tool": "terminal"
+        },
+        {
+          "command": "measure /work/second.png",
+          "output": "ink bbox partial; coverage 53%",
+          "tool": "terminal"
+        }
+      ],
+      "expect": {
+        "verdict": "BACKED",
+        "reason": "measurement-agrees"
+      }
     }
   ],
   "revision": 2,

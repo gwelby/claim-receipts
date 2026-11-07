@@ -82,7 +82,15 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
         mutations = []
         for path in targets:
             after = P.stat_of(path)
-            prior = before.get(path) or {"exists": False}
+            prior = before.get(path)
+            if prior is None:
+                # No pre-state was captured for this path — the pre hook never ran on it,
+                # or its snapshot was evicted. Substituting {"exists": False} here would
+                # INVENT a creation: every observed path with an unrecorded before would
+                # certify as "changed" even if the file sat untouched. Represent the
+                # missing pre-state as unknown (exists: None) so downstream can treat the
+                # record as incomplete rather than as a certified write.
+                prior = {"exists": None}
             if P.changed(prior, after):
                 mutations.append({"path": path, "before": prior, "after": after})
 

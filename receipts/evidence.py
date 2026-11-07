@@ -35,6 +35,14 @@ LISTING_PATTERNS = (
 # Arguments that are not paths.
 _FLAGS = re.compile(r"^-{1,2}[A-Za-z0-9_-]+$")
 
+# A listing only counts if the listing command STARTS a shell segment. `echo "ls /x"` matches
+# \bls\b inside the quoted string — printing a listing is not running one (R4).
+_SEGMENT_SPLIT = re.compile(r"\|\||&&|[|;]")
+_NAME_FILTER = re.compile(r"-i?name\s+(\S+)")
+_MAXDEPTH = re.compile(r"-maxdepth\s+(\d+)")
+_RECURSIVE_LS = re.compile(r"-[a-zA-Z]*R")
+_OTHER_FIND_PRED = re.compile(r"-(type|perm|size|mtime|newer|empty|user|group)\b")
+
 
 def _paths_in(args: str) -> list[str]:
     """Absolute paths only. A relative path in a listing command is relative to a CWD we never
@@ -51,11 +59,57 @@ def _paths_in(args: str) -> list[str]:
     return out
 
 
+def _listings_in(cmd: str) -> list[tuple[str, str, int | None, str | None, bool]]:
+    """(root, command, max_depth, name_filter, complete) for each EXECUTED listing segment.
+
+    Execution means the enumerating verb leads its own pipeline segment — an `ls` inside an
+    echo/printf/$(...) is a string, not an enumeration. `complete` is False when a pipe follows
+    the listing (head/grep/transform means the observed output cannot prove absence) or when
+    find carries filtering predicates other than -name (which is tracked separately).
+    """
+    out = []
+    segments = _SEGMENT_SPLIT.split(cmd)
+    seps = re.findall(_SEGMENT_SPLIT, cmd)
+    for i, seg in enumerate(segments):
+        toks = seg.strip().split(None, 1)
+        if not toks:
+            continue
+        verb, args = toks[0].strip("'\""), toks[1] if len(toks) > 1 else ""
+        is_verb = verb in ("ls", "dir", "tree") or verb == "find" or verb == "grep"
+        if not is_verb:
+            continue
+        if verb == "grep" and not re.match(r"-[a-zA-Z]*r", args.split()[0] if args.split() else ""):
+            continue
+        # only a `|` pipe transforms this listing's output; `;`, `&&`, `||` do not
+        complete = not (i < len(seps) and seps[i] == "|")
+        max_depth: int | None = None
+        name_filter: str | None = None
+        if verb in ("ls", "dir"):
+            max_depth = None if _RECURSIVE_LS.search(args) else 1
+        elif verb == "find":
+            m = _MAXDEPTH.search(args)
+            max_depth = int(m.group(1)) if m else None
+            nf = _NAME_FILTER.search(args)
+            name_filter = nf.group(1).strip("'\"") if nf else None
+            if _OTHER_FIND_PRED.search(args):
+                complete = False
+        for root in _paths_in(args):
+            out.append((root, seg.strip(), max_depth, name_filter, complete))
+    return out
+
+
+import fnmatch as _fnmatch
+
+
 @dataclass
 class Listing:
-    """A directory or tree the session actually enumerated."""
+    """A directory or tree the session actually enumerated — bound to outcome and content."""
     root: str
     command: str
+    ok: bool = True                 # the record that produced it actually succeeded (R4)
+    complete: bool = True           # output not truncated/filtered downstream (R4)
+    max_depth: int | None = None    # ls=1 unless -R; find=unbounded unless -maxdepth
+    name_filter: str | None = None  # find -name/-iname pattern, if any
 
     def covers(self, path: str) -> bool:
         """Was <path> inside the scope this listing looked at?
@@ -64,22 +118,46 @@ class Listing:
         directory at that moment, which the ledger does not record — so it covers nothing. Treating
         "." as "everywhere" produced three false CONTRADICTED verdicts on a real session
         ("absent inside ."), which is the worst failure this plugin can have.
+
+        Depth binds too (R4): a flat `ls /x` saw /x's children, not /x/sub's — so it cannot
+        prove anything about deeper paths.
         """
         root = os.path.normpath(self.root or "")
         target = os.path.normpath(path or "")
-        if root == os.sep:
-            return True
         if not os.path.isabs(root):
             return False
-        return target == root or target.startswith(root + os.sep)
+        if root != os.sep and not (target == root or target.startswith(root + os.sep)):
+            return False
+        if self.name_filter and not _fnmatch.fnmatch(
+                os.path.basename(target), self.name_filter):
+            return False                    # a name-filtered enumeration can't see this name
+        if self.max_depth is not None:
+            rel = os.path.relpath(target, root)
+            if rel.startswith(".."):
+                return False
+            depth = 0 if rel == os.curdir else len(rel.split(os.sep))
+            if depth > self.max_depth:
+                return False                # deeper than the enumeration reached
+        return True
 
 
 @dataclass
 class Evidence:
-    mutations: dict[str, dict] = field(default_factory=dict)   # path -> after-stat
+    mutations: dict[str, dict] = field(default_factory=dict)   # path -> FINAL after-stat
+    # Mutations whose before-state was never captured (exists: None). Recorded for
+    # traceability but never counted as observed writes — a creation cannot be
+    # certified without a captured before-state (R1).
+    incomplete_mutations: list[dict] = field(default_factory=list)
     listings: list[Listing] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)     # every command, in order
     failed_commands: list[str] = field(default_factory=list)  # those that did not return ok
+    # Ordered command events with ok flags — lifecycle is the point: an error that a
+    # later successful command repaired is not a standing failure (R3).
+    command_events: list[dict] = field(default_factory=list)  # {cmd, ok} in run order
+    # Records that show the session LOOKED at something (search/read/inspect tools, listing
+    # commands). A hedge needs one to mean anything — an unobserved "I could not verify"
+    # asserts an attempt no evidence supports (R5).
+    observations: list[str] = field(default_factory=list)
     # Tool OUTPUT, read from the host's transcript at session end — never copied into our own store.
     # A digest we wrote would be a second place for secrets to land; this is a read of what the host
     # already keeps.
@@ -138,12 +216,63 @@ class Evidence:
                 newer.append(c)
         return sorted(newer)
 
+    _OBSERVE_TOOLS = re.compile(
+        r"search|find|grep|ls|dir|tree|cat|read|rg|query|lookup|fetch|curl|"
+        r"scan|inspect|stat|wc|head|tail", re.I)
+
     def searched_for(self, path: str) -> Listing | None:
-        """A listing whose scope covers this path, if any ran this session."""
+        """A listing that can actually PROVE something about this path:
+        covers it, executed for real, succeeded, and was not truncated/filtered
+        downstream. Returns the first qualifying listing, or None — callers use
+        scope_report() to say WHY when they emit UNVERIFIABLE."""
         for lst in self.listings:
-            if lst.covers(path):
+            if lst.ok and lst.complete and lst.covers(path):
                 return lst
         return None
+
+    def scope_report(self, path: str) -> str:
+        """Why no listing can prove anything about <path> — for UNVERIFIABLE details."""
+        covering = [l for l in self.listings if l.covers(path)]
+        if not self.listings:
+            return "no listing ran this session"
+        if covering:
+            l = covering[0]
+            if not l.ok:
+                return f"listing of {l.root} failed ({l.command[:50]})"
+            if not l.complete:
+                return f"listing of {l.root} was truncated/filtered ({l.command[:50]})"
+        ran = ", ".join(sorted({l.root for l in self.listings})[:2])
+        return f"searched {ran}, outside its scope or depth: {path}"
+
+    def entries_of(self, lst: Listing) -> frozenset | None:
+        """Basenames the listing actually printed, if its output was captured.
+
+        An absence claim needs this: a covered scope whose contents we never
+        SAW cannot prove anything is absent (R4). Parsed lazily from
+        tool_outputs matched on the listing's command.
+        """
+        key = id(lst)
+        if key in self._entries_cache:
+            return self._entries_cache[key]
+        entries: set[str] = set()
+        found = False
+        for item in self.tool_outputs:
+            oc = (item.get("command") or "").strip()
+            if not oc or oc not in lst.command and lst.command not in oc:
+                continue
+            found = True
+            for line in (item.get("output") or "").splitlines():
+                line = line.strip()
+                if not line or line.startswith(("total ", "Permission denied")):
+                    continue
+                token = line.split()[-1] if line.split() else line
+                entries.add(os.path.basename(token.rstrip("/")))
+        self._entries_cache[key] = frozenset(entries) if found else None
+        return self._entries_cache[key]
+
+    def has_observation(self) -> bool:
+        """Did the session look at anything at all? (R5's hedge test.)"""
+        return bool(self.observations or self.listings or self.tool_outputs)
 
     def listing_scope_covers(self, path: str) -> bool:
         return self.searched_for(path) is not None
@@ -157,18 +286,22 @@ class Evidence:
                 p = mut.get("path")
                 if p:
                     ev.mutations[os.path.normpath(p)] = mut.get("after") or {}
+            tool = rec.get("tool") or ""
             cmd = rec.get("command")
+            ok = rec.get("status") in (None, "ok", "success")
+            if cls._OBSERVE_TOOLS.search(tool) or (
+                    cmd and cls._OBSERVE_TOOLS.search(cmd)):
+                ev.observations.append((tool or cmd or "").strip()[:120])
             if not cmd:
                 continue
+            ev.command_events.append({"cmd": cmd, "ok": ok})
             ev.commands.append(cmd)
-            if rec.get("status") not in (None, "ok", "success"):
+            if not ok:
                 ev.failed_commands.append(cmd)
-            for pat in LISTING_PATTERNS:
-                m = pat.search(cmd)
-                if not m:
-                    continue
-                for root in _paths_in(m.group("args") or ""):
-                    ev.listings.append(Listing(root=root, command=cmd.strip()[:200]))
+            for root, seg, depth, name_filter, complete in _listings_in(cmd):
+                ev.listings.append(Listing(root=root, command=seg[:200], ok=ok,
+                                           complete=complete, max_depth=depth,
+                                           name_filter=name_filter))
         return ev
 
     def measured_fractions(self) -> list[tuple[float, str]]:
@@ -201,7 +334,9 @@ class Evidence:
                     except ValueError:
                         continue
                     if 0.0 <= val <= 1.0:
-                        out.append((val, line.strip()[:100]))
+                        # Carry the producing command too — the subject join happens
+                        # on command+line, not the bare number (R3c).
+                        out.append((val, line.strip()[:100], item.get("command") or ""))
         return out
 
     @classmethod
@@ -230,13 +365,21 @@ class Evidence:
         for rec in data.get("ledger") or []:
             for mut in rec.get("mutations") or []:
                 p = mut.get("path")
-                if p:
+                if not p:
+                    continue
+                # Incomplete == explicit exists: None (unobserved pre-state). Missing
+                # before = legacy record, stays a normal mutation.
+                if mut.get("before") is not None and mut["before"].get("exists") is None:
+                    ev.incomplete_mutations.append(mut)
+                else:
                     ev.mutations[os.path.normpath(p)] = mut.get("after") or {}
             cmd = rec.get("command")
             if not cmd:
                 continue
+            ok = rec.get("status") in (None, "ok", "success")
+            ev.command_events.append({"cmd": cmd, "ok": ok})
             ev.commands.append(cmd)
-            if rec.get("status") not in (None, "ok", "success"):
+            if not ok:
                 ev.failed_commands.append(cmd)
             for pat in LISTING_PATTERNS:
                 m = pat.search(cmd)

@@ -180,6 +180,17 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
         if not measured:
             return Verdict("UNVERIFIABLE", "outside-session",
                            "no measurement was taken in this session")
+        # Subject join: a measurement only speaks to the claim it names. An unrelated
+        # second.png at 53% must not contradict first.png at 100% — join on the
+        # subject's tokens; an unjoined measurement is not evidence for this claim.
+        toks = {t for t in (path, os.path.basename(path or ""), claim.subject) if t}
+        if toks:
+            joined = [m for m in measured
+                      if any(t in (m[1] + " " + (m[2] if len(m) > 2 else "")) for t in toks)]
+            if not joined:
+                return Verdict("UNVERIFIABLE", "measurement-not-joined",
+                               f"{len(measured)} measurement(s) taken, none names this subject")
+            measured = joined
         low = min(measured, key=lambda m: m[0])
         if low[0] < 0.95:
             return Verdict("CONTRADICTED", "measurement-disagrees",
@@ -189,8 +200,11 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
     # ---- absence: only a listing can license this, and only inside its scope (case #2) ----
     if claim.kind == "absence":
         if path and path in ev.mutations:
-            return Verdict("CONTRADICTED", "artifact-present",
-                           f"the session wrote {path} and then reported it absent")
+            if ev.mutations[path].get("exists"):
+                return Verdict("CONTRADICTED", "artifact-present",
+                               f"the session wrote {path} and then reported it absent")
+            return Verdict("BACKED", "deleted-this-session",
+                           f"the session deleted {path} — absence by mutation, not listing")
         parent = os.path.dirname(path) if path else None
         listing = ev.searched_for(parent or path or "/")
         if listing is None:
@@ -229,8 +243,15 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
 
     # ---- existence ----
     if claim.kind == "existence":
+        if path and any(os.path.normpath(m.get("path") or "") == path
+                        for m in ev.incomplete_mutations):
+            return Verdict("UNVERIFIABLE", "unobserved-pre-state",
+                           f"a write to {path} was recorded but its before-state was never captured")
         if path and path in ev.mutations:
-            return Verdict("BACKED", "written-this-session", path)
+            if ev.mutations[path].get("exists"):
+                return Verdict("BACKED", "written-this-session", path)
+            return Verdict("CONTRADICTED", "deleted-this-session",
+                           f"{path} was deleted this session")
         if path and ev.stat(path).get("exists"):
             listing = ev.searched_for(path)
             return (Verdict("BACKED", "listed-this-session", path) if listing
@@ -248,11 +269,20 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
     # session's own later evidence — "I fixed it" followed by an error on the same thing.
     if path and SUCCESS.search(claim.text):
         subject_tokens = {path, os.path.basename(path)}
-        for cmd in ev.commands_for_error():
-            if any(tok and tok in cmd for tok in subject_tokens):
-                return Verdict("CONTRADICTED", "later-error",
-                               f"a later command on this subject failed: {cmd[:70]}")
-    if path and path in ev.mutations:
+        # Lifecycle: an error repaired by a LATER successful command on the same
+        # subject is not a standing failure — judge the last event, not any failure.
+        last = None
+        for e in ev.command_events:
+            if any(tok and tok in e["cmd"] for tok in subject_tokens):
+                last = e
+        if last is None:
+            for cmd in ev.commands_for_error():   # legacy path: no event order kept
+                if any(tok and tok in cmd for tok in subject_tokens):
+                    last = {"cmd": cmd, "ok": False}
+        if last is not None and not last["ok"]:
+            return Verdict("CONTRADICTED", "later-error",
+                           f"the last command on this subject failed: {last['cmd'][:70]}")
+    if path and path in ev.mutations and ev.mutations[path].get("exists"):
         return Verdict("BACKED", "written-this-session", path)
     if path and ev.stat(path).get("exists"):
         return Verdict("UNVERIFIABLE", "outside-session",
