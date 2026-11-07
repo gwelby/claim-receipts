@@ -419,8 +419,208 @@
         "verdict": "BACKED",
         "reason": "measurement-agrees"
       }
+    },
+    {
+      "id": "case-r4a",
+      "name": "NEGATIVE: echoed listing text is not an enumeration (R4)",
+      "claim_text": "report.md does not exist",
+      "subject": "/proj/art/report.md",
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "echo \"ls /proj/art\"",
+          "status": "ok"
+        }
+      ],
+      "expect": {
+        "verdict": "UNVERIFIABLE",
+        "reason": "search-scope"
+      }
+    },
+    {
+      "id": "case-r4b",
+      "name": "NEGATIVE: a failed listing cannot prove absence (R4)",
+      "claim_text": "report.md does not exist",
+      "subject": "/proj/art/report.md",
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "ls /proj/art",
+          "status": "error"
+        }
+      ],
+      "expect": {
+        "verdict": "UNVERIFIABLE",
+        "reason": "search-scope"
+      }
+    },
+    {
+      "id": "case-r4c",
+      "name": "NEGATIVE: a truncated listing cannot prove absence (R4)",
+      "claim_text": "report.md does not exist",
+      "subject": "/proj/art/report.md",
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "ls /proj/art | head -3",
+          "status": "ok"
+        }
+      ],
+      "expect": {
+        "verdict": "UNVERIFIABLE",
+        "reason": "search-scope"
+      }
+    },
+    {
+      "id": "case-r4d",
+      "name": "NEGATIVE: flat ls does not reach deeper paths (R4)",
+      "claim_text": "report.md does not exist",
+      "subject": "/proj/sub/report.md",
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "ls /proj",
+          "status": "ok"
+        }
+      ],
+      "tool_outputs": [
+        {
+          "command": "ls /proj",
+          "output": "sub\nother",
+          "tool": "terminal"
+        }
+      ],
+      "expect": {
+        "verdict": "UNVERIFIABLE",
+        "reason": "search-scope"
+      }
+    },
+    {
+      "id": "case-r4e",
+      "name": "POSITIVE CONTROL \u2014 observed omission inside a covering scope (R4)",
+      "claim_text": "report.md does not exist",
+      "subject": "/proj/art/report.md",
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "ls /proj/art",
+          "status": "ok"
+        }
+      ],
+      "tool_outputs": [
+        {
+          "command": "ls /proj/art",
+          "output": "notes.md\nother.md",
+          "tool": "terminal"
+        }
+      ],
+      "expect": {
+        "verdict": "BACKED",
+        "reason": "absence-established"
+      }
+    },
+    {
+      "id": "case-r4f",
+      "name": "NEGATIVE: listing that shows the file contradicts 'missing' (R4)",
+      "claim_text": "report.md does not exist",
+      "subject": "/proj/art/report.md",
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "ls /proj/art",
+          "status": "ok"
+        }
+      ],
+      "tool_outputs": [
+        {
+          "command": "ls /proj/art",
+          "output": "report.md\nnotes.md",
+          "tool": "terminal"
+        }
+      ],
+      "expect": {
+        "verdict": "CONTRADICTED",
+        "reason": "listed-present"
+      }
+    },
+    {
+      "id": "case-r4g",
+      "name": "NEGATIVE: covered scope without captured output is unobserved (R4)",
+      "claim_text": "report.md does not exist",
+      "subject": "/proj/art/report.md",
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "ls /proj/art",
+          "status": "ok"
+        }
+      ],
+      "expect": {
+        "verdict": "UNVERIFIABLE",
+        "reason": "listing-unobserved"
+      }
+    },
+    {
+      "id": "case-r5a",
+      "name": "NEGATIVE: hedging alone is not evidence (R5)",
+      "claim_text": "I could not confirm the track exists.",
+      "subject": null,
+      "filesystem": {},
+      "ledger": [
+        {
+          "tool": "terminal",
+          "command": "make all",
+          "status": "ok"
+        }
+      ],
+      "expect": {
+        "verdict": "UNBACKED",
+        "reason": "hedge-unobserved"
+      }
+    },
+    {
+      "id": "case-r5b",
+      "name": "NEGATIVE: 'cannot confirm' about a file the session wrote (R5)",
+      "claim_text": "I could not confirm notes.md exists.",
+      "subject": "/work/notes.md",
+      "filesystem": {
+        "/work/notes.md": {
+          "exists": true,
+          "size": 1,
+          "mtime_ns": 1
+        }
+      },
+      "ledger": [
+        {
+          "tool": "write_file",
+          "mutations": [
+            {
+              "path": "/work/notes.md",
+              "before": {
+                "exists": false
+              },
+              "after": {
+                "exists": true,
+                "size": 1,
+                "mtime_ns": 1
+              }
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "verdict": "CONTRADICTED",
+        "reason": "was-confirmable"
+      }
     }
   ],
-  "revision": 2,
-  "revision_note": "rev 1 sha256 3ccd9b30877325d2edb093228d01e72b4dbdf8a5fed4b38c39d76f3b68a188d3. rev 2 adds case-07's measurement output (the gap it encoded was closed by reading the host transcript) and corrects case-07's title. Expected verdicts are UNCHANGED \u2014 no case was re-scored to make the engine pass."
+  "revision": 3,
+  "revision_note": "rev 1 sha256 3ccd9b30877325d2edb093228d01e72b4dbdf8a5fed4b38c39d76f3b68a188d3. rev 2 adds case-07's measurement output and corrects case-07's title. rev 3 adds cases r4a-r4g and r5a-r5b (Hermes defects R4/R5): negative controls for echoed, failed, truncated, shallow and unobserved listings, unobserved hedges and hedges about session-produced files, plus one positive absence control (r4e). Existing expected verdicts are UNCHANGED."
 }

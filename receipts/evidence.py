@@ -128,14 +128,14 @@ class Listing:
             return False
         if root != os.sep and not (target == root or target.startswith(root + os.sep)):
             return False
-        if self.name_filter and not _fnmatch.fnmatch(
+        rel = os.path.relpath(target, root)
+        depth = 0 if rel == os.curdir else len(rel.split(os.sep))
+        if self.name_filter and depth >= 1 and not _fnmatch.fnmatch(
                 os.path.basename(target), self.name_filter):
             return False                    # a name-filtered enumeration can't see this name
         if self.max_depth is not None:
-            rel = os.path.relpath(target, root)
             if rel.startswith(".."):
                 return False
-            depth = 0 if rel == os.curdir else len(rel.split(os.sep))
             if depth > self.max_depth:
                 return False                # deeper than the enumeration reached
         return True
@@ -164,6 +164,9 @@ class Evidence:
     tool_outputs: list[dict] = field(default_factory=list)    # {command|tool, output}
     # Optional filesystem view, for fixtures. When None, real stat() is used.
     fs: dict[str, dict] | None = None
+
+    def __post_init__(self):
+        self._entries_cache: dict[int, frozenset | None] = {}
 
     # ------------------------------------------------------------------ lookups
     def commands_for_error(self) -> list[str]:
