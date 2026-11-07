@@ -5,7 +5,8 @@
 #   * every claim in the package is produced by a command whose output is captured, not written by hand
 #   * the tree is frozen by commit, and the bundle is a real clone target, so "this is the tree I
 #     reviewed" is verifiable rather than asserted
-#   * the Day-3 counts carry their DEFINITION, because a false-positive rate without a denominator is
+#   * the Day-3 counts carry their DEFINITION, because a share without a denominator is
+#     an unfalsifiable number — and this one is NOT a false-positive rate: there are no truth labels,
 #     a number that can mean anything
 set -uo pipefail
 
@@ -81,13 +82,14 @@ payload = {
         "CONTRADICTED": "evidence points the other way",
         "UNBACKED": "no evidence either way",
         "UNVERIFIABLE": "evidence cannot decide — reported separately, never folded into BACKED",
-        "FP_rate": "(CONTRADICTED + UNBACKED) / (BACKED + UNBACKED + CONTRADICTED)",
+        "unbacked_claim_share_formula": "(CONTRADICTED + UNBACKED) / (BACKED + UNBACKED + CONTRADICTED)",
         "why_this_denominator": "UNVERIFIABLE is the honest bucket, not a failure; including it would punish a tool for refusing to guess",
+        "not_a_false_positive_rate": "there are no truth labels here — nothing independently establishes that an UNBACKED or CONTRADICTED verdict was WRONG. This number is the share of checkable claims the tool declined to back; a justified warning and a false alarm are indistinguishable in it. Do not quote it as precision.",
     },
     "counts": c,
     "checkable": checkable,
-    "fp_rate": round(100 * (c["unbacked"] + c["contradicted"]) / checkable, 1) if checkable else None,
-    "gate": {"fp_threshold": 20, "pivot_threshold": 30, "pivot_fired": bool(checkable and
+    "unbacked_claim_share": round(100 * (c["unbacked"] + c["contradicted"]) / checkable, 1) if checkable else None,
+    "gate": {"unbacked_share_threshold": 20, "pivot_share_threshold": 30, "pivot_fired": bool(checkable and
              (c["unbacked"] + c["contradicted"]) / checkable > 0.30)},
     "known_limits": [
         f"only {checkable} claims were checkable in this one session; a small denominator is not a property",
@@ -97,7 +99,9 @@ payload = {
     ],
 }
 json.dump(payload, open(os.path.join(out, "day3_counts.json"), "w"), indent=2)
-print(f"day3 counts from {os.path.basename(src)}: {checkable} checkable, fp {payload['fp_rate']}%")
+print(f"day3 counts from {os.path.basename(src)}: {checkable} checkable, "
+      f"unbacked-claim share {payload['unbacked_claim_share']}% "
+      f"(a verdict share with no truth labels — NOT a false-positive rate)")
 PY
 
 # ---- 4. the outward commands, for Greg to approve one at a time ----
@@ -142,7 +146,7 @@ EOF
   echo "| history.bundle | \`git clone history.bundle\` reproduces the tree, so the reviewer's copy is provably ours |"
   echo "| tree.sha256 | every tracked file hashed; \`sha256sum -c\` on their copy must pass |"
   echo "| reproduction.log | raw output + exit codes of the three checks |"
-  echo "| day3_counts.json | the FP measurement **with its definition** and its known limits |"
+  echo "| day3_counts.json | the unbacked-claim share **with its definition**, explicitly NOT a false-positive rate, and its known limits |"
   echo "| outward_commands.md | the exact commands, none run |"
   echo
   echo "## Verify this package"

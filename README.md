@@ -2,6 +2,12 @@
 
 Evidence for agent sessions, checked against the filesystem.
 
+**A prompt can tell an agent to claim less. A skill can describe how to check. Neither can do this.**
+Hooks capture what the session actually did; an append-only ledger records it; a judge reconciles each
+prose claim against that record and returns a verdict — backed, unbacked, unverifiable or contradicted.
+That is a mechanism, not an instruction: you cannot write it into a system prompt, and no amount of
+"please be honest" produces a per-claim verdict that an outside reader can re-run.
+
 An agent says "done". This plugin records what the session's tools actually did — the file writes and
 command invocations it could observe — and reconciles the session's prose claims against that record.
 It compares a claim with evidence. It does not prove the claim true, and it does not authenticate the
