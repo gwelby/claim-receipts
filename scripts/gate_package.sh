@@ -14,6 +14,19 @@ OUT="${1:-$REPO/GATE_PACKAGE}"
 PY=/usr/bin/python3.12
 
 cd "$REPO" || exit 1
+
+# R8: the rm -rf below destroys whatever OUT resolves to. Guard it before touching
+# anything — a caller passing the repo, an ancestor, or root must be refused.
+CANON_OUT=$(realpath -m "$OUT" 2>/dev/null || echo "")
+CANON_REPO=$(realpath -m "$REPO")
+case "$CANON_OUT" in
+  ""|"/")
+    echo "REFUSING: output path resolves to an unsafe location: '$OUT'" >&2; exit 2;;
+  "$CANON_REPO/GATE_PACKAGE")
+    ;;   # the sanctioned package dir inside the tree (gitignored since 803a04e)
+  "$CANON_REPO"|"$CANON_REPO/"*)
+    echo "REFUSING: output path is the source tree or inside it: $CANON_OUT — rm -rf would destroy the input." >&2; exit 2;;
+esac
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 # ---- 1. the frozen tree ----

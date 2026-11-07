@@ -373,18 +373,20 @@ class Evidence:
                     ev.incomplete_mutations.append(mut)
                 else:
                     ev.mutations[os.path.normpath(p)] = mut.get("after") or {}
+            tool = rec.get("tool") or ""
             cmd = rec.get("command")
+            ok = rec.get("status") in (None, "ok", "success")
+            if cls._OBSERVE_TOOLS.search(tool) or (
+                    cmd and cls._OBSERVE_TOOLS.search(cmd)):
+                ev.observations.append((tool or cmd or "").strip()[:120])
             if not cmd:
                 continue
-            ok = rec.get("status") in (None, "ok", "success")
             ev.command_events.append({"cmd": cmd, "ok": ok})
             ev.commands.append(cmd)
             if not ok:
                 ev.failed_commands.append(cmd)
-            for pat in LISTING_PATTERNS:
-                m = pat.search(cmd)
-                if not m:
-                    continue
-                for root in _paths_in(m.group("args") or ""):
-                    ev.listings.append(Listing(root=root, command=cmd.strip()[:200]))
+            for root, seg, depth, name_filter, complete in _listings_in(cmd):
+                ev.listings.append(Listing(root=root, command=seg[:200], ok=ok,
+                                           complete=complete, max_depth=depth,
+                                           name_filter=name_filter))
         return ev

@@ -169,10 +169,19 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
     """One claim, one verdict. Never returns a boolean — the reason always comes with it."""
     path = resolve(claim.subject, ev)
 
-    # ---- hedge: honest uncertainty is not a false claim (acceptance case #6) ----
+    # ---- hedge: honest uncertainty is not a false claim — but hedging itself
+    # is not evidence either (R5). BACKED needs a captured search/observation;
+    # writing the thing you then "cannot confirm" is contradicted outright.
     if claim.kind == "hedge":
-        return Verdict("BACKED", "hedge-matches-scope",
-                       "the claim reports the limits of its own search")
+        if path and path in ev.mutations and ev.mutations[path].get("exists"):
+            return Verdict("CONTRADICTED", "was-confirmable",
+                           f"the session produced {path} and then claimed it could not confirm it")
+        if ev.has_observation():
+            return Verdict("BACKED", "hedge-matches-scope",
+                           "the claim reports the limits of a search the session actually ran")
+        return Verdict("UNBACKED", "hedge-unobserved",
+                       "no search or observation ran — 'could not verify' asserts an attempt "
+                       "nothing supports")
 
     # ---- coverage: a measured percentage can contradict an extent claim (case #7) ----
     if claim.kind == "coverage":
@@ -207,16 +216,23 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
                            f"the session deleted {path} — absence by mutation, not listing")
         parent = os.path.dirname(path) if path else None
         listing = ev.searched_for(parent or path or "/")
-        if listing is None:
-            ran = ", ".join(sorted({l.root for l in ev.listings})[:2])
-            detail = (f"searched {ran}, but the claim is about {parent or path}"
-                      if ran else "no listing ran this session, so nothing establishes the absence")
-            return Verdict("UNVERIFIABLE", "search-scope", detail)
-        if path and not listing.covers(path):
+        if listing is None or (path and not listing.covers(path)):
             return Verdict("UNVERIFIABLE", "search-scope",
-                           f"searched {listing.root}, claim is about {path}")
+                           ev.scope_report(parent or path or "/"))
+        # A covered scope is necessary, not sufficient (R4): we must have SEEN
+        # what the listing saw. Entries captured -> presence contradicts,
+        # omission backs the absence; no captured output -> cannot prove.
+        entries = ev.entries_of(listing)
+        if entries is None:
+            return Verdict("UNVERIFIABLE", "listing-unobserved",
+                           f"{listing.command[:60]} ran but its output was not captured — "
+                           "a listing is not an observation of absence")
+        name = os.path.basename(path or "")
+        if name and name in entries:
+            return Verdict("CONTRADICTED", "listed-present",
+                           f"{name} appeared in the listing of {listing.root}")
         return Verdict("BACKED", "absence-established",
-                       f"absence established inside {listing.root}")
+                       f"absence established inside {listing.root} ({len(entries)} entries seen)")
 
     # ---- currency: 'current' is a claim about siblings, not about the file (case #1) ----
     if claim.kind == "currency":
