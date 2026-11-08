@@ -154,6 +154,9 @@ class Evidence:
     # Ordered command events with ok flags — lifecycle is the point: an error that a
     # later successful command repaired is not a standing failure (R3).
     command_events: list[dict] = field(default_factory=list)  # {cmd, ok} in run order
+    # Writes + commands in one ordered stream — a failure answered by a write repair is
+    # repaired, not standing (R3).
+    events: list[dict] = field(default_factory=list)  # {kind: write|command, ...}
     # Records that show the session LOOKED at something (search/read/inspect tools, listing
     # commands). A hedge needs one to mean anything — an unobserved "I could not verify"
     # asserts an attempt no evidence supports (R5).
@@ -287,8 +290,14 @@ class Evidence:
         for rec in records or []:
             for mut in rec.get("mutations") or []:
                 p = mut.get("path")
-                if p:
+                if not p:
+                    continue
+                if mut.get("before") is not None and mut["before"].get("exists") is None:
+                    ev.incomplete_mutations.append(mut)
+                else:
                     ev.mutations[os.path.normpath(p)] = mut.get("after") or {}
+                    ev.events.append({"kind": "write", "path": os.path.normpath(p),
+                                      "exists": (mut.get("after") or {}).get("exists")})
             tool = rec.get("tool") or ""
             cmd = rec.get("command")
             ok = rec.get("status") in (None, "ok", "success")
@@ -298,6 +307,7 @@ class Evidence:
             if not cmd:
                 continue
             ev.command_events.append({"cmd": cmd, "ok": ok})
+            ev.events.append({"kind": "command", "cmd": cmd, "ok": ok})
             ev.commands.append(cmd)
             if not ok:
                 ev.failed_commands.append(cmd)
@@ -376,6 +386,8 @@ class Evidence:
                     ev.incomplete_mutations.append(mut)
                 else:
                     ev.mutations[os.path.normpath(p)] = mut.get("after") or {}
+                    ev.events.append({"kind": "write", "path": os.path.normpath(p),
+                                      "exists": (mut.get("after") or {}).get("exists")})
             tool = rec.get("tool") or ""
             cmd = rec.get("command")
             ok = rec.get("status") in (None, "ok", "success")
@@ -385,6 +397,7 @@ class Evidence:
             if not cmd:
                 continue
             ev.command_events.append({"cmd": cmd, "ok": ok})
+            ev.events.append({"kind": "command", "cmd": cmd, "ok": ok})
             ev.commands.append(cmd)
             if not ok:
                 ev.failed_commands.append(cmd)

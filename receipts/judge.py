@@ -91,6 +91,10 @@ def extract_claims(text: str) -> list[Claim]:
             m = TOKENISH.search(sentence)
             if m:
                 subject = m.group(0)
+        # Ordinary punctuation must not become part of the subject (R2): "fixed
+        # 'build.py'." and "created out.txt," bind the same as unquoted forms.
+        if subject:
+            subject = subject.strip(chr(96)).strip(chr(39)).strip(chr(34)).rstrip(".,;:!?)")
         scope_all = bool(SCOPE.search(sentence))
 
         # Hedge first: honest uncertainty must never be scored as a false claim.
@@ -251,11 +255,18 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
                        f"no newer sibling of {os.path.basename(entity)} under {listing.root}")
 
     # ---- scope: 'all/every' is only as wide as what was touched (case #3) ----
-    if claim.scope_all and claimed_count and evidence_count is not None:
-        if evidence_count < claimed_count:
-            return Verdict("UNBACKED", "scope-narrower",
-                           f"claim covers {claimed_count}, evidence covers {evidence_count}")
-        return Verdict("BACKED", "scope-covered", f"{evidence_count} of {claimed_count}")
+    if claim.scope_all:
+        if claimed_count and evidence_count is not None:
+            if evidence_count < claimed_count:
+                return Verdict("UNBACKED", "scope-narrower",
+                               f"claim covers {claimed_count}, evidence covers {evidence_count}")
+            return Verdict("BACKED", "scope-covered", f"{evidence_count} of {claimed_count}")
+        # Production carries no injected counts: an extent claim we cannot bind
+        # abstains rather than silently falling through (R2).
+        if claimed_count is None or evidence_count is None:
+            return Verdict("UNVERIFIABLE", "scope-unbindable",
+                           "the claim asserts an extent ('all/every') but no countable "
+                           "scope was bound this session")
 
     # ---- existence ----
     if claim.kind == "existence":
@@ -288,14 +299,18 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
         # Lifecycle: an error repaired by a LATER successful command on the same
         # subject is not a standing failure — judge the last event, not any failure.
         last = None
-        for e in ev.command_events:
-            if any(tok and tok in e["cmd"] for tok in subject_tokens):
+        for e in ev.events:
+            if e["kind"] == "command":
+                if any(tok and tok in e["cmd"] for tok in subject_tokens):
+                    last = e
+            elif e["kind"] == "write" and any(
+                    tok and tok in e["path"] for tok in subject_tokens):
                 last = e
         if last is None:
             for cmd in ev.commands_for_error():   # legacy path: no event order kept
                 if any(tok and tok in cmd for tok in subject_tokens):
                     last = {"cmd": cmd, "ok": False}
-        if last is not None and not last["ok"]:
+        if last is not None and last.get("kind", "command") == "command" and not last.get("ok"):
             return Verdict("CONTRADICTED", "later-error",
                            f"the last command on this subject failed: {last['cmd'][:70]}")
     if path and path in ev.mutations and ev.mutations[path].get("exists"):

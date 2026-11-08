@@ -16,8 +16,11 @@ PY=/usr/bin/python3.12
 
 cd "$REPO" || exit 1
 
-# R8: the rm -rf below destroys whatever OUT resolves to. Guard it before touching
-# anything — a caller passing the repo, an ancestor, or root must be refused.
+# R8: the rm -rf below destroys whatever OUT resolves to — and DID: on 2026-11-07 a
+# run with OUT=/home/greg/work deleted the entire working tree (repo included) because
+# the dirty-check sat AFTER the rm. Every refusal below happens BEFORE any write or
+# deletion, and the incident stays named here because a guard without the scar invites
+# someone to remove it.
 CANON_OUT=$(realpath -m "$OUT" 2>/dev/null || echo "")
 CANON_REPO=$(realpath -m "$REPO")
 case "$CANON_OUT" in
@@ -28,6 +31,15 @@ case "$CANON_OUT" in
   "$CANON_REPO"|"$CANON_REPO/"*)
     echo "REFUSING: output path is the source tree or inside it: $CANON_OUT — rm -rf would destroy the input." >&2; exit 2;;
 esac
+# Ancestor check: if REPO resolves INSIDE OUT, deleting OUT deletes the tree.
+case "$CANON_REPO" in
+  "$CANON_OUT"|"$CANON_OUT/"*)
+    echo "REFUSING: output path is an ancestor of the source tree: $CANON_OUT" >&2; exit 2;;
+esac
+# Pre-existing non-empty dir that is not the sanctioned location: never rm unknown data.
+if [ -d "$CANON_OUT" ] && [ -n "$(ls -A "$CANON_OUT" 2>/dev/null)" ]    && [ "$CANON_OUT" != "$CANON_REPO/GATE_PACKAGE" ]; then
+  echo "REFUSING: output path exists and is not empty: $CANON_OUT — will not rm an unknown directory." >&2; exit 2
+fi
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 # ---- 1. the frozen tree ----
@@ -156,6 +168,22 @@ EOF
   echo "sha256sum -c ../tree.sha256                   # must be all OK"
   echo '```'
 } > "$OUT/MANIFEST.md"
+
+# ---- 6. final status: required artifacts + verifiable export; nothing silently green ----
+MISSING=""
+for f in COMMIT HEAD.txt history.bundle tree.sha256 reproduction.log MANIFEST.md outward_commands.md day3_counts.json; do
+  [ -s "$OUT/$f" ] || MISSING="$MISSING $f"
+done
+if ! git bundle verify "$OUT/history.bundle" >/dev/null 2>&1; then
+  MISSING="$MISSING history.bundle(unverifiable)"
+fi
+if ! command -v hermes >/dev/null 2>&1; then
+  echo "NOTE: 'hermes plugins validate' did not run — tool unavailable" | tee -a "$OUT/reproduction.log"
+fi
+if [ -n "$MISSING" ]; then
+  echo "REFUSING: package incomplete — missing/unverifiable:$MISSING" >&2
+  exit 3
+fi
 
 echo
 echo "gate package: $OUT"

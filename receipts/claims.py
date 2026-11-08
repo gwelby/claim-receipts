@@ -36,11 +36,16 @@ def render_session_summary(session_id: str = "", task_id: str = "") -> str:
                 "Nothing has been written or run, or the hooks are not loaded.")
 
     paths = {}
+    unobserved = []
     commands = []
     for rec in records:
         for m in rec.get("mutations") or []:
             p = m.get("path")
-            if p:
+            if not p:
+                continue
+            if m.get("before") is not None and (m.get("before") or {}).get("exists") is None:
+                unobserved.append((p, m.get("after") or {}))   # R1: seen write, no before = not certified
+            else:
                 paths[p] = (m.get("after") or {})
         cmd = rec.get("command")
         if cmd:
@@ -52,6 +57,8 @@ def render_session_summary(session_id: str = "", task_id: str = "") -> str:
         size = st.get("size")
         age = _ago(st.get("mtime_ns", 0))
         lines.append(f"  changed  {p}  ({size} B, {age} ago)")
+    for p, st in unobserved:
+        lines.append(f"  observed  {p}  (write seen, before-state never captured — not certified)")
     if commands:
         lines.append("")
         for cmd, status in commands[-10:]:
