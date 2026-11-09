@@ -40,28 +40,39 @@ esac
 if [ -d "$CANON_OUT" ] && [ -n "$(ls -A "$CANON_OUT" 2>/dev/null)" ]    && [ "$CANON_OUT" != "$CANON_REPO/GATE_PACKAGE" ]; then
   echo "REFUSING: output path exists and is not empty: $CANON_OUT — will not rm an unknown directory." >&2; exit 2
 fi
-rm -rf "$OUT"; mkdir -p "$OUT"
+# A regular file at OUT is refused too — rm -rf would otherwise delete an unknown file.
+if [ -e "$CANON_OUT" ] && [ ! -d "$CANON_OUT" ]; then
+  echo "REFUSING: output path exists and is not a directory: $CANON_OUT" >&2; exit 2
+fi
 
-# ---- 1. the frozen tree ----
+# ---- 0. the frozen tree — BEFORE any deletion ----
+# Round-3: this check used to sit after `rm -rf "$OUT"`, so a refused run still
+# destroyed a pre-existing output. Every refusal now precedes every write.
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "REFUSING: working tree is dirty. A package of an uncommitted tree cannot be reproduced." >&2
   git status --porcelain | head -20 >&2
   exit 2
 fi
+rm -rf "$OUT"; mkdir -p "$OUT"
 
 COMMIT=$(git rev-parse HEAD)
 git log -1 --format='commit %H%nAuthor %an <%ae>%nDate   %aI%n%n%s' > "$OUT/HEAD.txt"
 git bundle create "$OUT/history.bundle" --all >/dev/null 2>&1
 git log --stat --format='%n=== %h %aI %s' > "$OUT/history.txt"
-# every tracked file, hashed, sorted — so a reviewer can diff their copy against ours
-git ls-files -z | sort -z | xargs -0 sha256sum > "$OUT/tree.sha256" 2>/dev/null
+# every tracked file, hashed from an IMMUTABLE export of the commit — not the live
+# tree — so the sidecar cannot absorb drift introduced after the dirty check's instant
+EXPORT_TMP="$(mktemp -d)"; trap 'rm -rf "$EXPORT_TMP"' EXIT
+git archive "$COMMIT" | tar -x -C "$EXPORT_TMP"
+git ls-files | sort | (cd "$EXPORT_TMP" && xargs -d '\n' sha256sum) > "$OUT/tree.sha256" 2>/dev/null
 echo "$COMMIT" > "$OUT/COMMIT"
 
-# ---- 2. reproduction: run the checks and keep the RAW output ----
+# ---- 2. reproduction: run the checks, keep the RAW output, and CAPTURE the exits
+# — round-3: exit codes used to be logged then discarded; they now gate final status
+TEST_EXIT=0; ACC_EXIT=0; VAL_EXIT=0
 {
-  echo "### make test"; make test 2>&1; echo "exit=$?"
-  echo; echo "### make acceptance"; make acceptance 2>&1; echo "exit=$?"
-  echo; echo "### hermes plugins validate ."; hermes plugins validate . 2>&1 | tail -5; echo "exit=$?"
+  echo "### make test"; make test 2>&1; TEST_EXIT=$?; echo "exit=$TEST_EXIT"
+  echo; echo "### make acceptance"; make acceptance 2>&1; ACC_EXIT=$?; echo "exit=$ACC_EXIT"
+  echo; echo "### hermes plugins validate ."; hermes plugins validate . 2>&1; VAL_EXIT=$?; echo "exit=$VAL_EXIT"
 } > "$OUT/reproduction.log" 2>&1
 
 # ---- 3. the Day-3 measurement, with its definition written down ----
@@ -115,6 +126,7 @@ print(f"day3 counts from {os.path.basename(src)}: {checkable} checkable, "
       f"unbacked-claim share {payload['unbacked_claim_share']}% "
       f"(a verdict share with no truth labels — NOT a false-positive rate)")
 PY
+DAY3_EXIT=$?
 
 # ---- 4. the outward commands, for Greg to approve one at a time ----
 cat > "$OUT/outward_commands.md" <<EOF
@@ -126,11 +138,11 @@ Nothing below has been run. The repository does not exist; there are no remotes.
     gh repo create gwelby/hermes-plugin-receipts --public \\
         --description "Receipts — proof of work for AI agent sessions"
 
-## 2. Push this exact commit
+## 2. Push this exact commit — the reviewed tree, pinned by SHA not branch name
     git remote add origin git@github.com:gwelby/hermes-plugin-receipts.git
-    git push -u origin master
-    # pushed commit: $COMMIT
-    # verify: git ls-remote origin | grep $COMMIT
+    git push -u origin $COMMIT:refs/heads/master
+    # verify (scoped to the one ref; must print exactly $COMMIT):
+    git ls-remote origin refs/heads/master | grep -F "$COMMIT"
 
 ## 3. Post the entry (after the video exists)
     # attach: demo.mp4 (<= 90 s), repo URL, one paragraph
@@ -169,19 +181,24 @@ EOF
   echo '```'
 } > "$OUT/MANIFEST.md"
 
-# ---- 6. final status: required artifacts + verifiable export; nothing silently green ----
+# ---- 6. final status: required artifacts + verifiable export + required-check
+# success. Round-3: the captured exit codes now gate — a failed make test,
+# make acceptance, validator run, or Day-3 stage refuses the package instead of
+# ending exit 0 with artifacts present. ----
 MISSING=""
-for f in COMMIT HEAD.txt history.bundle tree.sha256 reproduction.log MANIFEST.md outward_commands.md day3_counts.json; do
+for f in COMMIT HEAD.txt history.txt history.bundle tree.sha256 reproduction.log MANIFEST.md outward_commands.md day3_counts.json; do
   [ -s "$OUT/$f" ] || MISSING="$MISSING $f"
 done
 if ! git bundle verify "$OUT/history.bundle" >/dev/null 2>&1; then
   MISSING="$MISSING history.bundle(unverifiable)"
 fi
-if ! command -v hermes >/dev/null 2>&1; then
-  echo "NOTE: 'hermes plugins validate' did not run — tool unavailable" | tee -a "$OUT/reproduction.log"
-fi
-if [ -n "$MISSING" ]; then
-  echo "REFUSING: package incomplete — missing/unverifiable:$MISSING" >&2
+FAILED=""
+[ "${TEST_EXIT:-1}" -eq 0 ] || FAILED="$FAILED make-test(${TEST_EXIT:-?})"
+[ "${ACC_EXIT:-1}" -eq 0 ] || FAILED="$FAILED make-acceptance(${ACC_EXIT:-?})"
+[ "${VAL_EXIT:-1}" -eq 0 ] || FAILED="$FAILED validator(${VAL_EXIT:-?})"
+[ "${DAY3_EXIT:-1}" -eq 0 ] || FAILED="$FAILED day3(${DAY3_EXIT:-?})"
+if [ -n "$MISSING" ] || [ -n "$FAILED" ]; then
+  echo "REFUSING: package failed — missing/unverifiable:$MISSING failed-checks:$FAILED" >&2
   exit 3
 fi
 

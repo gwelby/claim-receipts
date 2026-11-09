@@ -187,6 +187,26 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
                        "no observation touched this claim's subject — 'could not verify' "
                        "asserts an attempt nothing supports")
 
+    # ---- scope: 'all/every' is only as wide as what was touched (case #3) ----
+    # Aggregate-scope admission runs BEFORE the favorable kind branches: a claim
+    # asserting an extent ("all 2 images are full-page") must bind the full
+    # declared scope or abstain — it may not pass through a single-subject branch
+    # and take a favorable verdict for one measurement (Codex round-2 residual).
+    # Hedge still preempts: reporting "I could not verify all of it" is honest
+    # uncertainty, not an extent assertion.
+    if claim.scope_all:
+        if claimed_count and evidence_count is not None:
+            if evidence_count < claimed_count:
+                return Verdict("UNBACKED", "scope-narrower",
+                               f"claim covers {claimed_count}, evidence covers {evidence_count}")
+            return Verdict("BACKED", "scope-covered", f"{evidence_count} of {claimed_count}")
+        # Production carries no injected counts: an extent claim we cannot bind
+        # abstains rather than silently falling through (R2).
+        if claimed_count is None or evidence_count is None:
+            return Verdict("UNVERIFIABLE", "scope-unbindable",
+                           "the claim asserts an extent ('all/every') but no countable "
+                           "scope was bound this session")
+
     # ---- coverage: a measured percentage can contradict an extent claim (case #7) ----
     if claim.kind == "coverage":
         measured = ev.measured_fractions()
@@ -254,20 +274,6 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
         return Verdict("BACKED", "newest-in-scope",
                        f"no newer sibling of {os.path.basename(entity)} under {listing.root}")
 
-    # ---- scope: 'all/every' is only as wide as what was touched (case #3) ----
-    if claim.scope_all:
-        if claimed_count and evidence_count is not None:
-            if evidence_count < claimed_count:
-                return Verdict("UNBACKED", "scope-narrower",
-                               f"claim covers {claimed_count}, evidence covers {evidence_count}")
-            return Verdict("BACKED", "scope-covered", f"{evidence_count} of {claimed_count}")
-        # Production carries no injected counts: an extent claim we cannot bind
-        # abstains rather than silently falling through (R2).
-        if claimed_count is None or evidence_count is None:
-            return Verdict("UNVERIFIABLE", "scope-unbindable",
-                           "the claim asserts an extent ('all/every') but no countable "
-                           "scope was bound this session")
-
     # ---- existence ----
     if claim.kind == "existence":
         if path and any(os.path.normpath(m.get("path") or "") == path
@@ -303,8 +309,11 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
             if e["kind"] == "command":
                 if any(tok and tok in e["cmd"] for tok in subject_tokens):
                     last = e
-            elif e["kind"] == "write" and any(
-                    tok and tok in e["path"] for tok in subject_tokens):
+            elif e["kind"] == "write" and e.get("path") and \
+                    os.path.normpath(e["path"]) == os.path.normpath(path):
+                # Writes join on the exact normalized target identity — a substring
+                # or basename match lets /other/report.md or report.md.bak pose as
+                # a repair of report.md and cancel a standing failure (round-3).
                 last = e
         if last is None:
             for cmd in ev.commands_for_error():   # legacy path: no event order kept
