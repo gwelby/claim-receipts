@@ -15,6 +15,18 @@ because a fix was attempted; it is fixed when a control that can fail proves it.
 | R7 | The Day-3 "false-positive rate" is a verdict share without truth labels — it divides the plugin's own `unbacked`+`contradicted` by its own checkable verdicts and cannot distinguish a justified warning from a false alarm. | `scripts/gate_package.sh:89` | **fixed by renaming, not by obtaining labels** — the quantity is now `unbacked_claim_share` and the payload carries `not_a_false_positive_rate`, stating that nothing independently establishes that an unbacked verdict was wrong. Renaming is the honest fix: inventing truth labels would have made the number look like precision it has not earned. |
 | R8 | The gate package builder can destroy its input: it runs an unrestricted `rm -rf "$OUT"` before any cleanliness check, including when `OUT` names the repo. Failed checks are logged but do not gate the final listing. | `scripts/gate_package.sh:17` | **repaired in `a9fcb5f`** — path resolved and refused for empty/root/the repo itself; verified repo-as-OUT and `/` refused. Awaiting Codex's second-party recheck. |
 
+## Round-2 recheck residuals (Codex, 2026-11-08, on `f4e205a`)
+
+The recheck credited the repairs above and found **three open items — two of them
+new regressions introduced by the round-2 lifecycle repair itself.** That is the
+pattern to weigh: the last repair round fixed things and broke things.
+
+| # | Defect | Where | Status |
+|---|---|---|---|
+| R2-residual | Aggregate-scope admission runs after favorable kind branches. Coverage+scope claim ("All 2 images are full-page") takes a favorable verdict from ONE joined measurement while the scope guard never runs. Bind the full declared scope or abstain. | `receipts/judge.py` (scope guard was at :257, after the coverage return at :192-211) | **repaired on branch `round3-repairs` @ `b97d828`** — scope admission now runs before the kind branches; probe: the exact Codex shape returns UNVERIFIABLE/scope-unbindable, single-subject coverage stays BACKED. Awaiting Codex recheck. |
+| R3-regression-a | The lifecycle join admits unrelated writes: `e["path"]` substring/basename match lets `/other/report.md` or `report.md.bak` pose as a repair of `report.md` and cancel a standing failure → BACKED. | `receipts/judge.py:302-309` | **repaired on `round3-repairs` @ `b97d828`** — writes join only on exact normalized path identity; both hostile shapes now return CONTRADICTED/later-error; the genuine exact-path repair still returns BACKED. Awaiting Codex recheck. |
+| R8-residual | Default cleanup reached `rm`/`mkdir` at :43 before the dirty-tree refusal at :46 — a refused run still destroyed a pre-existing output. Required-check exits (test/acceptance/validator/Day-3) were captured then discarded: failures ended exit 0 with artifacts present. `history.txt` absent from the required list; validator output truncated; hashes taken on the live tree, not an immutable export; outward draft pushed mutable `master` with an unscoped `ls-remote`. | `scripts/gate_package.sh` | **repaired on `round3-repairs` @ `b97d828`** — all refusals precede all deletion; regular-file OUT refused; captured exits gate (stubbed validator → exit 3, was 0); raw validator output; `tree.sha256` hashed from a `git archive` export; push bound to the pinned SHA with scoped verify. Awaiting Codex recheck. |
+
 ## What the audit did not do
 
 It did not execute the destructive cases or the live-data package builder, and it did not rewrite
