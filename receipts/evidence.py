@@ -262,23 +262,71 @@ class Evidence:
             return self._entries_cache[key]
         entries: set[str] = set()
         found = False
+        # R4 join rule: a transcript output binds to this listing when the
+        # listing's segment text is an exact pipeline component of the joined
+        # originating command — never a substring guess (`ls /a` output must
+        # not alias to `ls /ab`, and a plain `ls /a` must not claim
+        # `ls /a | grep x`'s filtered output as its own). Unjoined outputs
+        # (command=None) bind to nothing.
+        verb = (lst.command.split() or [""])[0].strip("'\"") if lst.command else ""
         for item in self.tool_outputs:
             oc = (item.get("command") or "").strip()
-            if not oc or oc not in lst.command and lst.command not in oc:
+            if not oc:
+                continue
+            segments = [s.strip() for s in _SEGMENT_SPLIT.split(oc)]
+            if lst.command.strip() not in segments:
                 continue
             found = True
             for line in (item.get("output") or "").splitlines():
                 line = line.strip()
-                if not line or line.startswith(("total ", "Permission denied")):
+                if (not line
+                        or line.startswith(("total ", "Permission denied", "{", '"'))):
                     continue
-                token = line.split()[-1] if line.split() else line
-                entries.add(os.path.basename(token.rstrip("/")))
+                if verb in ("find", "tree"):
+                    entries.add(os.path.basename(line.rstrip("/")))
+                elif verb == "grep":
+                    entries.add(os.path.basename(line.split(":", 1)[0].rstrip("/")))
+                elif " -> " in line:                       # ls -l symlink row
+                    entries.add(os.path.basename(line.split(" -> ", 1)[0].split()[-1].rstrip("/")))
+                elif re.match(r"^[-dlpscbx][-rwxsStT]{9}", line):  # ls -l row
+                    entries.add(os.path.basename(line.split()[-1].rstrip("/")))
+                else:                                      # plain ls: every token is a name
+                    for tok in line.split():
+                        entries.add(os.path.basename(tok.rstrip("/")))
         self._entries_cache[key] = frozenset(entries) if found else None
         return self._entries_cache[key]
 
-    def has_observation(self) -> bool:
-        """Did the session look at anything at all? (R5's hedge test.)"""
-        return bool(self.observations or self.listings or self.tool_outputs)
+    def has_observation(self, subject: str | None = None) -> bool:
+        """Did the session actually LOOK at the claim's scope? (R5)
+
+        A hedge asserts an attempt; this is the attempt's evidence. Unscoped
+        (subject=None): any real observation counts. Scoped: only an
+        observation naming the subject, a successful listing that covered
+        AND saw it, or a bound observe-tool command naming it. Echo output,
+        failed commands, unrelated listings and unbound outputs are not an
+        attempt on this subject — the residual cases Codex carried open.
+        """
+        if subject is None:
+            return bool(self.observations or self.listings
+                        or [o for o in self.tool_outputs if o.get("command")])
+        keys = {t for t in (subject, os.path.basename(subject)) if t}
+        for ob in self.observations:
+            if any(k in ob for k in keys):
+                return True
+        for l in self.listings:
+            if l.ok and l.covers(subject) and self.entries_of(l) is not None:
+                return True
+        base = os.path.basename(subject)
+        if base and any(base in (self.entries_of(l) or frozenset())
+                        for l in self.listings if l.ok):
+            return True   # a listing that SAW the named file observed it
+        for item in self.tool_outputs:
+            cmd = (item.get("command") or "")
+            toks = cmd.split()
+            if toks and self._OBSERVE_TOOLS.search(toks[0].strip("'\"")) \
+                    and any(k in cmd for k in keys):
+                return True
+        return False
 
     def listing_scope_covers(self, path: str) -> bool:
         return self.searched_for(path) is not None
@@ -301,8 +349,10 @@ class Evidence:
             tool = rec.get("tool") or ""
             cmd = rec.get("command")
             ok = rec.get("status") in (None, "ok", "success")
-            if cls._OBSERVE_TOOLS.search(tool) or (
-                    cmd and cls._OBSERVE_TOOLS.search(cmd)):
+            if ok and (cls._OBSERVE_TOOLS.search(tool) or (
+                    cmd and cls._OBSERVE_TOOLS.search(cmd))):
+                # R5: a failed observe call is a non-observation — it cannot
+                # back "I searched and could not verify".
                 ev.observations.append((tool or cmd or "").strip()[:120])
             if not cmd:
                 continue
@@ -391,8 +441,9 @@ class Evidence:
             tool = rec.get("tool") or ""
             cmd = rec.get("command")
             ok = rec.get("status") in (None, "ok", "success")
-            if cls._OBSERVE_TOOLS.search(tool) or (
-                    cmd and cls._OBSERVE_TOOLS.search(cmd)):
+            if ok and (cls._OBSERVE_TOOLS.search(tool) or (
+                    cmd and cls._OBSERVE_TOOLS.search(cmd))):
+                # R5: failed observe calls are not observations (fixture parity).
                 ev.observations.append((tool or cmd or "").strip()[:120])
             if not cmd:
                 continue

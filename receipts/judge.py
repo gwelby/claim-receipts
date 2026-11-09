@@ -180,12 +180,12 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
         if path and path in ev.mutations and ev.mutations[path].get("exists"):
             return Verdict("CONTRADICTED", "was-confirmable",
                            f"the session produced {path} and then claimed it could not confirm it")
-        if ev.has_observation():
+        if ev.has_observation(path or claim.subject):
             return Verdict("BACKED", "hedge-matches-scope",
                            "the claim reports the limits of a search the session actually ran")
         return Verdict("UNBACKED", "hedge-unobserved",
-                       "no search or observation ran — 'could not verify' asserts an attempt "
-                       "nothing supports")
+                       "no observation touched this claim's subject — 'could not verify' "
+                       "asserts an attempt nothing supports")
 
     # ---- coverage: a measured percentage can contradict an extent claim (case #7) ----
     if claim.kind == "coverage":

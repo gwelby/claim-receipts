@@ -103,5 +103,54 @@ except Exception as exc:
     print("    raised:", exc)
 check("non-sqlite file -> empty, never raises", ok)
 
+# ---- 5. native join: tool_call_id -> assistant tool_calls -> originating command ----
+# The R4/R5 verdict needs output bound to the COMMAND that produced it. Real Hermes
+# rows carry `tool_call_id` on the tool row and the call definition (function name +
+# JSON arguments) in `messages.tool_calls` on the assistant row. Content is a JSON
+# envelope {"output": ...}. Unbound calls keep output but command stays None — no
+# guessing.
+import json as _json
+
+join_db = os.path.join(tmp, "join.db")
+con = sqlite3.connect(join_db)
+con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, "
+            "content TEXT, tool_name TEXT, tool_call_id TEXT, tool_calls TEXT, timestamp TEXT)")
+con.executemany(
+    "INSERT INTO messages (session_id, role, content, tool_name, tool_call_id, tool_calls, "
+    "timestamp) VALUES (?,?,?,?,?,?,?)", [
+        ("s1", "assistant", None, None, None,
+         _json.dumps([{"id": "call_00_abc",
+                       "function": {"name": "terminal",
+                                    "arguments": _json.dumps({"command": "ls /work"})}}]),
+         "t1"),
+        ("s1", "tool", _json.dumps({"output": "a.md\nb.md"}), "terminal",
+         "call_00_abc", None, "t2"),
+        ("s1", "tool", _json.dumps({"output": "raw line"}), "terminal",
+         "call_99_missing", None, "t3"),          # call id matches no assistant call
+        ("s1", "assistant", None, None, None,
+         "not json at all", "t4"),               # malformed tool_calls: skip, don't crash
+    ])
+con.commit()
+con.close()
+
+outs = transcript.read_tool_outputs("s1", db_path=join_db)
+bound = next((o for o in outs if o["call_id"] == "call_00_abc"), None)
+unbound = next((o for o in outs if o["call_id"] == "call_99_missing"), None)
+check("join: output bound to originating command",
+      bound is not None and bound["command"] == "ls /work",
+      repr(bound and bound["command"]))
+check("join: JSON envelope unwrapped to raw output",
+      bound is not None and bound["output"] == "a.md\nb.md",
+      repr(bound and bound["output"][:20]))
+check("join: unbound call keeps output, command stays None",
+      unbound is not None and unbound["command"] is None
+      and unbound["output"] == "raw line")
+check("join: malformed tool_calls row skipped without raising", len(outs) == 2)
+
+# ---- 6. minimal schema (no call linkage) still yields output, unbound ----
+outs_min = transcript.read_tool_outputs("s1", db_path=db)
+check("minimal schema -> command None, output intact",
+      all(o["command"] is None for o in outs_min) and len(outs_min) == 2)
+
 print(f"\n  {len(fails)} failure(s)" if fails else "\n  ok — transcript reads are bounded and fail open")
 sys.exit(1 if fails else 0)
