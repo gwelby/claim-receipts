@@ -112,6 +112,25 @@ if name=='make':
     p=fenced(Path.cwd()/'tracked.txt')
     if E('MOCK_MAKE_MUTATES')=='1' and mode=='test':write(p,b'checks rewrote the checked bytes\n')
     if E('MOCK_MAKE_TOUCH_LIVE'):write(Path(E('MOCK_MAKE_TOUCH_LIVE')),b'live edit while checks ran\n')
+    if E('MOCK_MAKE_KILL_GATE')=='1':
+        # an interrupted build: SIGKILL every ancestor that is the gate script (and its subshells) — nothing else
+        import signal
+        pid=os.getppid();killed=[]
+        while pid>1:
+            try:
+                cmd=Path('/proc/%d/cmdline'%pid).read_bytes()
+                ppid=int(Path('/proc/%d/stat'%pid).read_text().rsplit(')',1)[1].split()[1])
+            except OSError:break
+            argv=cmd.split(b'\0')
+            # exact: a bash whose script argument IS this row's candidate/scripts/gate_package.sh; stop at the
+            # first ancestor that is not (never walks past the gate into the test runner or anything above)
+            if not any(a.endswith(b'/candidate/scripts/gate_package.sh') for a in argv[1:2]):
+                if killed:break
+            else:killed.append(pid)
+            pid=ppid
+        event['effects'].append({'killed_gate_pids':killed})
+        for k in killed:os.kill(k,signal.SIGKILL)
+        finish(137)
     rc=int(E('MOCK_MAKE_'+mode.upper(),'0'))
     finish(rc,out='synthetic %s exit %d\nsynthetic checked cwd=%s\nsynthetic checked tracked_sha256=%s\n'%(mode,rc,Path.cwd(),digest(p)))
 if name=='hermes':
@@ -217,7 +236,25 @@ TRACKED = b"synthetic tracked source\n"
 SECOND = b"synthetic second committed source\n"
 
 
-def run(name, out_kind="new", **mock):
+def seed_receipt(folder, stem, session, backed=2, unbacked=1, contradicted=0, raw=None, mtime=None):
+    """A synthetic receipt in the shape receipts/receipt.py write() produces (only the fields the gate reads)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    p = folder / f"{stem}.json"
+    data = raw if raw is not None else json.dumps(
+        {"session": session, "generated": "2026-11-10T00:00:00+0000",
+         "claims": {"detected": backed + unbacked + contradicted + 1, "judged": backed + unbacked + contradicted,
+                    "backed": backed, "unbacked": unbacked, "contradicted": contradicted, "unverifiable": 1}},
+        indent=2).encode()
+    p.write_bytes(data)
+    if mtime is not None:
+        os.utime(p, (mtime, mtime))
+    return p
+
+
+def run(name, out_kind="new", real_day3=None, **mock):
+    """real_day3=None: the Day-3 python is intercepted (BASH_ENV), as in every C5 row.
+    real_day3=callable(root) -> env dict: the REAL Day-3 stage runs over synthetic receipts the callable seeds
+    under root (HOME=root/home); the dict adds RECEIPTS_SESSION / RECEIPTS_ROOT. Reads only fixture files."""
     root = BASE / name
     repo = root / "candidate"
     (repo / "scripts").mkdir(parents=True)
@@ -238,6 +275,11 @@ def run(name, out_kind="new", **mock):
            "MOCK_COMMIT": COMMIT, "FENCE_ROOT": str(root), "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"}
     for k, v in mock.items():
         env["MOCK_" + k.upper()] = str(int(v) if isinstance(v, bool) else v)
+    if real_day3 is not None:
+        del env["BASH_ENV"]                     # the absolute python is NOT intercepted in these rows
+        env["HOME"] = str(root / "home")
+        (root / "home").mkdir()
+        env.update(real_day3(root))
     out = root / "new-output"
     if out_kind == "repo": out = repo
     elif out_kind == "inside": out = repo / "owned-subtree"; out.mkdir()
@@ -268,8 +310,23 @@ def run(name, out_kind="new", **mock):
         "py": sum(c["command"] == "absolute-python-intercepted" for c in calls),
         "changed": {k for k in set(before) | set(after) if before.get(k) != after.get(k)},
         "log": art("reproduction.log"), "sums": art("tree.sha256"), "outward": art("outward_commands.md"),
+        "day3": json.loads(art("day3_counts.json")) if art("day3_counts.json") is not None else None,
+        "failed_mark": art("FAILED"), "manifest": art("MANIFEST.md"),
         "root": root, "out": out,
     }
+
+
+def marked_failed(r, name):
+    """MINOR (exit 3): a failed package must carry FAILED and must NOT carry MANIFEST.md."""
+    check(f"{name}: FAILED marker present, no MANIFEST.md",
+          r["failed_mark"] is not None and r["manifest"] is None,
+          f"FAILED={'yes' if r['failed_mark'] is not None else 'no'} MANIFEST={'yes' if r['manifest'] is not None else 'no'}")
+
+
+def marked_complete(r, name):
+    check(f"{name}: MANIFEST.md present, FAILED marker gone",
+          r["manifest"] is not None and r["failed_mark"] is None and "test ! -e ../FAILED" in (r["manifest"] or ""),
+          f"FAILED={'yes' if r['failed_mark'] is not None else 'no'} MANIFEST={'yes' if r['manifest'] is not None else 'no'}")
 
 
 def no_harness(r, name):
@@ -299,11 +356,13 @@ for kind in ("existing_empty_dir", "existing_file", "existing_external", "dangli
 r = run("clean_default_sanctioned", "default")
 check("clean sanctioned GATE_PACKAGE: replaced, exit 0", r["exit"] == 0 and not (r["out"] / "KEEP").exists(),
       f"exit={r['exit']} {r['stderr'][-200:]}")
+marked_complete(r, "clean sanctioned GATE_PACKAGE")
 
 print("\npositives: complete export, checked in place, ends 0")
 r = run("baseline_mocked")
 no_harness(r, "baseline")
 check("baseline exit 0", r["exit"] == 0, r["stderr"][-300:])
+marked_complete(r, "baseline")
 check("baseline Day-3 stage intercepted exactly once", r["py"] == 1, r["py"])
 check("baseline sidecar = exported (committed) bytes", r["sums"] == f"{SHA_T}  tracked.txt\n", r["sums"])
 check("baseline seven validator lines retained",
@@ -337,6 +396,7 @@ for name, kw, needles in (
     no_harness(r, name)
     check(f"{name}: exit 3 naming {needles}", r["exit"] == 3 and all(n in r["stderr"] for n in needles),
           f"exit={r['exit']} {r['stderr'][-160:]}")
+    marked_failed(r, name)
     if name == "failed_required_checks":
         check("raw log keeps exit=17/19/23", r["log"] is not None and all(f"exit={n}" in r["log"] for n in (17, 19, 23)))
 
@@ -345,20 +405,32 @@ r = run("partial_archive_export", second_file=1, archive_omit_second=1, archive=
 no_harness(r, "partial")
 check("partial archive (37, one of two files): nonzero, no COMMIT written",
       r["exit"] != 0 and not (r["out"] / "COMMIT").exists(), f"exit={r['exit']} {r['stderr'][-160:]}")
+marked_failed(r, "partial archive")
+check("partial archive: the abort reason is recorded in FAILED",
+      "reason: export of" in (r["failed_mark"] or ""), (r["failed_mark"] or "")[-160:])
 r = run("archive_failed_after_complete_export", archive=37)
 no_harness(r, "archive37")
 check("archive 37 after complete export: nonzero", r["exit"] != 0, f"exit={r['exit']} {r['stderr'][-160:]}")
+marked_failed(r, "archive 37 after complete export")
 r = run("index_drift_omits_file", second_file=1, index_omit_second_late=1)
 no_harness(r, "index drift")
 check("index omission after dirty check: nonzero", r["exit"] != 0, f"exit={r['exit']} {r['stderr'][-160:]}")
+marked_failed(r, "index omission after dirty check")
 check("index omission: sidecar (if any) is never missing a committed file",
       r["sums"] is None or ("second.txt" in r["sums"] and "tracked.txt" in r["sums"]), r["sums"])
 r = run("live_tree_race", live_race=1)
 no_harness(r, "live race")
 check("live race: nonzero", r["exit"] != 0, f"exit={r['exit']} {r['stderr'][-160:]}")
+marked_failed(r, "live race")
 digests = [c["stdout"].split("tracked_sha256=")[1].strip() for c in r["make"]]
 check("live race: checks read the FROZEN bytes, same as the sidecar",
       digests and all(d == SHA_T for d in digests) and r["sums"] == f"{SHA_T}  tracked.txt\n", digests)
+
+print("\nMINOR exit-3: an INTERRUPTED build (gate killed during make test) leaves FAILED, never a MANIFEST.md")
+r = run("killed_during_checks", make_kill_gate=1)
+no_harness(r, "killed")
+check("killed build: nonzero (SIGKILL)", r["exit"] != 0, r["exit"])
+marked_failed(r, "killed build")
 
 print("\nC5 extensions: incomplete/foreign/altered export, failed list, mutation by checks, bundle identity")
 for name, kw in (
@@ -373,9 +445,185 @@ for name, kw in (
     r = run(name, **kw)
     no_harness(r, name)
     check(f"{name}: nonzero", r["exit"] != 0, f"exit={r['exit']} {r['stderr'][-160:]}")
+    marked_failed(r, name)
 r = run("index_drift_early", second_file=1, index_omit_second_early=1)
 check("index omission before the build: dirty refusal exit 2, nothing changed",
       r["exit"] == 2 and not r["rm"] and not r["mkdir"] and not r["changed"], f"exit={r['exit']}")
+
+print("\nfinding 9: Day-3 counts bound to the named session, RECEIPTS_ROOT, and the exact receipt bytes")
+print("  (real Day-3 python over synthetic receipts under a fixture HOME; everything else mocked as above)")
+T_OLD, T_NEW = 1_700_000_000, 1_700_000_500
+sha_of = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+seeded = {}
+
+
+def home_rdir(root):
+    return root / "home" / ".hermes" / "plugin-data" / "receipts" / "receipts"
+
+
+def d_named_missing(root):
+    # Hostile row: the named session has no receipt; ANOTHER session's receipt is the newest one there.
+    seed_receipt(home_rdir(root), "other-session", "other-session", backed=0, unbacked=5, mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_named_missing", real_day3=d_named_missing)
+no_harness(r, "day3 named missing")
+check("named session with no receipt: exit 3 naming day3(...)",
+      r["exit"] == 3 and "day3(" in r["stderr"] and "wanted-session" in r["stderr"], f"exit={r['exit']} {r['stderr'][-220:]}")
+check("named session with no receipt: no day3_counts.json (never another session's counts)",
+      r["day3"] is None, (r["day3"] or {}).get("session"))
+marked_failed(r, "day3 named missing")
+
+
+def d_named_present(root):
+    seeded["named"] = seed_receipt(home_rdir(root), "wanted-session", "wanted-session", mtime=T_OLD)
+    seed_receipt(home_rdir(root), "other-session", "other-session", backed=0, unbacked=5, mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_named_present", real_day3=d_named_present)
+no_harness(r, "day3 named present")
+check("paired positive: named session present (older than another) -> exit 0", r["exit"] == 0, r["stderr"][-300:])
+marked_complete(r, "day3 named present")
+d = r["day3"] or {}
+check("named positive: counts are the NAMED session's, not the newest",
+      d.get("session") == "wanted-session" and d.get("counts", {}).get("backed") == 2, d.get("session"))
+check("named positive: source path + sha256 + size + selection + commit recorded",
+      d.get("source_receipt_path") == str(seeded["named"]) and d.get("source_receipt_sha256") == sha_of(seeded["named"])
+      and d.get("source_receipt_bytes") == seeded["named"].stat().st_size
+      and d.get("receipt_selection") == "named by RECEIPTS_SESSION" and d.get("package_commit") == COMMIT,
+      {k: d.get(k) for k in ("source_receipt_path", "receipt_selection", "package_commit")})
+check("named positive: receipts_root is the default when RECEIPTS_ROOT is unset",
+      d.get("receipts_root_from", "").startswith("default"), d.get("receipts_root_from"))
+
+
+def d_env_root(root):
+    alt = root / "alt-root"
+    seeded["alt"] = seed_receipt(alt / "receipts", "alt-session", "alt-session", backed=3, unbacked=0, mtime=T_OLD)
+    seed_receipt(home_rdir(root), "home-session", "home-session", backed=0, unbacked=5, mtime=T_NEW)  # decoy
+    return {"RECEIPTS_ROOT": str(alt), "RECEIPTS_SESSION": "alt-session"}
+r = run("day3_receipts_root_honoured", real_day3=d_env_root)
+no_harness(r, "day3 RECEIPTS_ROOT")
+d = r["day3"] or {}
+check("RECEIPTS_ROOT honoured: exit 0, counts from $RECEIPTS_ROOT/receipts, not ~/.hermes",
+      r["exit"] == 0 and d.get("session") == "alt-session" and d.get("source_receipt_path") == str(seeded["alt"])
+      and d.get("receipts_root_from") == "RECEIPTS_ROOT", f"exit={r['exit']} session={d.get('session')} {r['stderr'][-200:]}")
+
+
+def d_env_root_unnamed(root):
+    alt = root / "alt-root"
+    seeded["alt_u"] = seed_receipt(alt / "receipts", "alt-session", "alt-session", backed=3, unbacked=0, mtime=T_OLD)
+    seed_receipt(home_rdir(root), "home-session", "home-session", backed=0, unbacked=5, mtime=T_NEW)  # decoy
+    return {"RECEIPTS_ROOT": str(alt)}
+r = run("day3_receipts_root_unnamed", real_day3=d_env_root_unnamed)
+no_harness(r, "day3 RECEIPTS_ROOT unnamed")
+d = r["day3"] or {}
+check("RECEIPTS_ROOT, no session named: newest UNDER RECEIPTS_ROOT (the newer default-root decoy ignored)",
+      r["exit"] == 0 and d.get("session") == "alt-session" and d.get("source_receipt_sha256") == sha_of(seeded["alt_u"]),
+      f"exit={r['exit']} session={d.get('session')}")
+
+
+def d_env_root_missing(root):
+    (root / "alt-root" / "receipts").mkdir(parents=True)
+    seed_receipt(home_rdir(root), "wanted-session", "wanted-session", mtime=T_NEW)  # only under the default root
+    return {"RECEIPTS_ROOT": str(root / "alt-root"), "RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_receipts_root_named_missing", real_day3=d_env_root_missing)
+no_harness(r, "day3 RECEIPTS_ROOT named missing")
+check("RECEIPTS_ROOT set, named receipt only under ~/.hermes: refused (no fall-through to the default root)",
+      r["exit"] == 3 and "day3(" in r["stderr"] and r["day3"] is None, f"exit={r['exit']} {r['stderr'][-200:]}")
+marked_failed(r, "day3 RECEIPTS_ROOT named missing")
+
+
+def d_unnamed(root):
+    seed_receipt(home_rdir(root), "older-session", "older-session", mtime=T_OLD)
+    seeded["newest"] = seed_receipt(home_rdir(root), "newest-session", "newest-session", backed=4, mtime=T_NEW)
+    return {}
+r = run("day3_unnamed_newest", real_day3=d_unnamed)
+no_harness(r, "day3 unnamed")
+d = r["day3"] or {}
+check("positive control: no session named -> newest receipt, exit 0, selection stated, bytes bound",
+      r["exit"] == 0 and d.get("session") == "newest-session" and d.get("receipt_selection", "").startswith("newest by mtime of 2")
+      and d.get("source_receipt_sha256") == sha_of(seeded["newest"]), f"exit={r['exit']} {d.get('receipt_selection')}")
+marked_complete(r, "day3 unnamed")
+
+
+def d_content_mismatch(root):
+    # a receipt FILE named for the requested session whose CONTENT is another session's (copied/renamed)
+    seed_receipt(home_rdir(root), "wanted-session", "other-session", backed=0, unbacked=5, mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_content_names_other_session", real_day3=d_content_mismatch)
+no_harness(r, "day3 content mismatch")
+check("receipt file named for the session but whose content names another: refused",
+      r["exit"] == 3 and "day3(" in r["stderr"] and r["day3"] is None, f"exit={r['exit']} {r['stderr'][-200:]}")
+
+
+def d_symlink(root):
+    real = seed_receipt(root / "elsewhere", "wanted-session", "wanted-session", mtime=T_NEW)
+    home_rdir(root).mkdir(parents=True)
+    (home_rdir(root) / "wanted-session.json").symlink_to(real)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_named_symlink", real_day3=d_symlink)
+no_harness(r, "day3 symlink")
+check("named receipt that is a symlink: refused (the bound path must be the bytes read)",
+      r["exit"] == 3 and "day3(" in r["stderr"] and r["day3"] is None, f"exit={r['exit']} {r['stderr'][-200:]}")
+
+
+def d_malformed(root):
+    seed_receipt(home_rdir(root), "wanted-session", "wanted-session", raw=b"{not json", mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_malformed", real_day3=d_malformed)
+no_harness(r, "day3 malformed")
+check("malformed named receipt: refused", r["exit"] == 3 and "day3(" in r["stderr"] and r["day3"] is None,
+      f"exit={r['exit']} {r['stderr'][-200:]}")
+marked_failed(r, "day3 malformed")
+
+
+def d_unnamed_mismatch(root):
+    # no session named; the NEWEST file's name and its content disagree (a copied receipt) -> refuse
+    seed_receipt(home_rdir(root), "older-session", "older-session", mtime=T_OLD)
+    seed_receipt(home_rdir(root), "newest-session", "someone-else", mtime=T_NEW)
+    return {}
+r = run("day3_unnamed_name_content_mismatch", real_day3=d_unnamed_mismatch)
+no_harness(r, "day3 unnamed mismatch")
+check("no session named, newest file's name != the session it contains: refused",
+      r["exit"] == 3 and "day3(" in r["stderr"] and r["day3"] is None, f"exit={r['exit']} {r['stderr'][-200:]}")
+
+
+def d_bad_counts(root):
+    raw = json.dumps({"session": "wanted-session", "generated": "x",
+                      "claims": {"backed": True, "unbacked": -1, "contradicted": 3}}).encode()  # computes without the guard
+    seed_receipt(home_rdir(root), "wanted-session", "wanted-session", raw=raw, mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_non_integer_counts", real_day3=d_bad_counts)
+no_harness(r, "day3 bad counts")
+check("receipt whose counts are not non-negative integers: refused (never computed into a share)",
+      r["exit"] == 3 and "day3(" in r["stderr"] and r["day3"] is None, f"exit={r['exit']} {r['stderr'][-200:]}")
+
+
+def d_stem_collision(root):
+    # sessions "team/a" and "team_a" share one file name (receipt.py maps "/" to "_"); asking for "team/a"
+    # must not accept the receipt of "team_a" — only the content equality check can tell them apart
+    seed_receipt(home_rdir(root), "team_a", "team_a", backed=0, unbacked=5, mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "team/a"}
+r = run("day3_stem_collision", real_day3=d_stem_collision)
+no_harness(r, "day3 stem collision")
+check("named 'team/a' but the file team_a.json belongs to session 'team_a': refused",
+      r["exit"] == 3 and "day3(" in r["stderr"] and r["day3"] is None, f"exit={r['exit']} {r['stderr'][-200:]}")
+
+
+def d_slash_session(root):
+    seeded["slash"] = seed_receipt(home_rdir(root), "team_a", "team/a", mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "team/a"}
+r = run("day3_slash_session_positive", real_day3=d_slash_session)
+no_harness(r, "day3 slash session")
+check("paired positive: named 'team/a' whose receipt (team_a.json) says 'team/a' -> exit 0",
+      r["exit"] == 0 and (r["day3"] or {}).get("session") == "team/a", f"exit={r['exit']} {r['stderr'][-200:]}")
+
+
+def d_none(root):
+    return {}
+r = run("day3_no_receipts", real_day3=d_none)
+no_harness(r, "day3 none")
+check("retained: no receipts at all -> refused, no day3_counts.json", r["exit"] == 3 and r["day3"] is None,
+      f"exit={r['exit']} {r['stderr'][-200:]}")
+marked_failed(r, "day3 none")
 
 print("\nreal git (throwaway repo, no remote; make/hermes/rm/Day-3 intercepted)")
 GIT = shutil.which("git", path="/usr/bin:/bin")

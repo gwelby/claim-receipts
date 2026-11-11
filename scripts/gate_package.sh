@@ -69,9 +69,23 @@ if ! mkdir -p -- "$(dirname -- "$CANON_OUT")" || ! mkdir -- "$CANON_OUT"; then
 fi
 OUT="$CANON_OUT"   # absolute from here on; checks below run in another cwd
 
+# FAILED marker (round 2, hostile MINOR "exit 3 leaves a complete-looking package"): 364be5d wrote
+# MANIFEST.md before the final status check, so an exit-3 run left a folder indistinguishable from a
+# good package. Now the marker is the FIRST file written and the LAST file removed: it is deleted only
+# after every check passed and MANIFEST.md exists. Any failure, abort, kill or crash in between leaves
+# it in place, and MANIFEST.md is never written on a failed run.
+FAILED_MARK="$OUT/FAILED"
+if ! printf '%s\n' \
+    "FAILED — this folder is NOT a gate package." \
+    "The build is in progress, failed, or was interrupted. While this file exists nothing here may be" \
+    "read as reviewed or complete. Reasons recorded by the build follow (none = it never finished)." \
+    "" > "$FAILED_MARK"; then
+  echo "REFUSING: could not write the FAILED marker in $OUT" >&2; exit 3
+fi
+
 # Any failure in producing the bound export or its hashes ABORTS (exit 3). fdb8f87 ignored
 # these statuses, so a failed or partial archive still ended 0 with a partial tree.sha256.
-abort_pkg() { echo "REFUSING: package failed — $*" >&2; exit 3; }
+abort_pkg() { echo "reason: $*" >> "$FAILED_MARK" 2>/dev/null; echo "REFUSING: package failed — $*" >&2; exit 3; }
 
 COMMIT=$(git rev-parse --verify 'HEAD^{commit}') || abort_pkg "cannot resolve HEAD to a commit"
 [ -n "$COMMIT" ] || abort_pkg "empty commit id"
@@ -143,27 +157,92 @@ TEST_EXIT=0; ACC_EXIT=0; VAL_EXIT=0
 RECHECK_EXIT=$?
 
 # ---- 3. the Day-3 measurement, with its definition written down ----
+# Round 2, hostile finding 9: 364be5d read a hard-coded ~/.hermes/plugin-data path (ignoring
+# RECEIPTS_ROOT, which the plugin itself honours in receipts/ledger.py root()), and a RECEIPTS_SESSION
+# whose receipt did not exist silently fell back to the newest receipt of ANY session — so the package
+# could carry another session's counts under the requested name. Now:
+#   * the receipts folder is the plugin's own: $RECEIPTS_ROOT/receipts, else ~/.hermes/plugin-data/receipts/receipts
+#   * a NAMED session whose receipt is missing, not a regular file, unreadable, malformed, or whose
+#     content names a different session REFUSES (nonzero) — there is no fallback from a named session
+#   * with no session named, the newest receipt is used and the package says so (receipt_selection)
+#   * the exact bytes counted are the bytes hashed: source path + sha256 + size go into day3_counts.json,
+#     together with the packaged commit (package_commit)
+#   * every refusal exits nonzero, so the final status names day3(N) and no day3_counts.json is written
 SESSION="${RECEIPTS_SESSION:-}"
-$PY - "$OUT" "$SESSION" <<'PY'
-import json, os, sys, glob
-out, session = sys.argv[1], sys.argv[2]
-src = None
+$PY - "$OUT" "$SESSION" "$COMMIT" <<'PY'
+import hashlib, json, os, stat, sys
+out, session, commit = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def refuse(msg):
+    print(f"day3: REFUSING — {msg}", file=sys.stderr)
+    sys.exit(4)
+
+
+def stem_of(sid):
+    # exactly receipts/receipt.py write(): the file a session's receipt is written to
+    return sid.replace("/", "_").replace(os.sep, "_")
+
+
+env_root = os.environ.get("RECEIPTS_ROOT") or ""          # same rule as receipts/ledger.py root()
+root = env_root or os.path.join(os.path.expanduser("~"), ".hermes", "plugin-data", "receipts")
+rdir = os.path.join(root, "receipts")
+
 if session:
-    src = os.path.expanduser(f"~/.hermes/plugin-data/receipts/receipts/{session}.json")
-if not src or not os.path.isfile(src):
-    cands = sorted(glob.glob(os.path.expanduser("~/.hermes/plugin-data/receipts/receipts/*.json")),
-                   key=os.path.getmtime, reverse=True)
-    src = cands[0] if cands else None
-if not src:
-    print("no receipt found — Day-3 counts unavailable", file=sys.stderr)
-    sys.exit(0)
-d = json.load(open(src))
+    src = os.path.join(rdir, stem_of(session) + ".json")
+    selection = "named by RECEIPTS_SESSION"
+else:
+    try:
+        cands = []
+        with os.scandir(rdir) as it:
+            for e in it:
+                if e.name.endswith(".json") and e.is_file(follow_symlinks=False):
+                    cands.append((e.stat(follow_symlinks=False).st_mtime_ns, e.name))
+    except OSError as exc:            # an unreadable folder is never read as "no receipts"
+        refuse(f"cannot list receipts folder {rdir}: {exc.__class__.__name__}")
+    if not cands:
+        refuse(f"no receipt found in {rdir} — Day-3 counts unavailable")
+    src = os.path.join(rdir, max(cands)[1])
+    selection = f"newest by mtime of {len(cands)} receipt(s) — no RECEIPTS_SESSION named"
+
+# one open, no symlinks, regular file only; the bytes hashed are the bytes parsed
+try:
+    fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+except FileNotFoundError:
+    refuse(f"receipt for session {session!r} not found: {src}" if session else f"receipt vanished: {src}")
+except OSError as exc:
+    refuse(f"cannot open receipt {src}: {exc.__class__.__name__} (symlinks are refused)")
+with os.fdopen(fd, "rb") as fh:
+    if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+        refuse(f"receipt is not a regular file: {src}")
+    raw = fh.read()
+sha = hashlib.sha256(raw).hexdigest()
+try:
+    d = json.loads(raw)
+except ValueError:
+    refuse(f"receipt is not valid JSON: {src}")
+if not isinstance(d, dict) or not isinstance(d.get("session"), str) or not isinstance(d.get("claims"), dict):
+    refuse(f"receipt lacks a session string or a claims object: {src}")
+if session and d["session"] != session:
+    refuse(f"receipt {src} names session {d['session']!r}, not the requested {session!r}")
+if stem_of(d["session"]) + ".json" != os.path.basename(src):
+    refuse(f"receipt file name does not match the session it names ({d['session']!r}): {src}")
 c = d["claims"]
+for k in ("backed", "unbacked", "contradicted"):
+    if type(c.get(k)) is not int or c[k] < 0:
+        refuse(f"receipt claims.{k} is not a non-negative integer: {src}")
 checkable = c["backed"] + c["unbacked"] + c["contradicted"]
 payload = {
+    "package_commit": commit,
     "source_receipt": os.path.basename(src),
+    "source_receipt_path": os.path.abspath(src),
+    "source_receipt_sha256": sha,
+    "source_receipt_bytes": len(raw),
+    "receipt_selection": selection,
+    "receipts_root": root,
+    "receipts_root_from": "RECEIPTS_ROOT" if env_root else "default (~/.hermes/plugin-data/receipts)",
     "session": d["session"],
-    "generated": d["generated"],
+    "generated": d.get("generated"),
     "definition": {
         "claim": "a statement in the assistant's own text that the extractor can type and locate",
         "judged": "claims whose subject resolves to something in this session's evidence",
@@ -186,12 +265,17 @@ payload = {
         "claim detection is regex-based: paraphrases are missed and appear as 'no claim detected'",
         "relative paths are unjudgeable by design (they belong to a CWD or another host)",
         "the sealed 8/8 acceptance set was written by the same author and is a DEVELOPMENT score",
+        "a receipt does not record which plugin commit judged it: package_commit names the package these "
+        "counts were shipped in, not proof that this commit produced them; source_receipt_sha256 binds the "
+        "exact receipt bytes counted",
     ],
 }
-json.dump(payload, open(os.path.join(out, "day3_counts.json"), "w"), indent=2)
+with open(os.path.join(out, "day3_counts.json"), "w") as fh:
+    json.dump(payload, fh, indent=2)
 print(f"day3 counts from {os.path.basename(src)}: {checkable} checkable, "
       f"unbacked-claim share {payload['unbacked_claim_share']}% "
       f"(a verdict share with no truth labels — NOT a false-positive rate)")
+print(f"day3 source: {payload['source_receipt_path']} sha256 {sha} ({selection})")
 PY
 DAY3_EXIT=$?
 
@@ -226,7 +310,10 @@ Nothing below has been run. The repository does not exist; there are no remotes.
 - [ ] disclosure review: no internal paths, seat names, register ids, hostnames, IPs, keys
 EOF
 
-# ---- 5. the manifest ----
+# ---- 5. the manifest — WRITTEN ONLY AFTER SECTION 6 PASSES ----
+# 364be5d wrote it here unconditionally, so an exit-3 package still had a MANIFEST.md. It is now a
+# function, called once every required artifact and check is green; a failed run never has one.
+write_manifest() {
 {
   echo "# Gate package — receipts plugin"
   echo
@@ -243,22 +330,28 @@ EOF
   echo "| tree.sha256 | every tracked file hashed; \`sha256sum -c\` on their copy must pass |"
   echo "| reproduction.log | raw output + exit codes of the three checks |"
   echo "| day3_counts.json | the unbacked-claim share **with its definition**, explicitly NOT a false-positive rate, and its known limits |"
+  echo "| day3_counts.json (source) | which receipt was counted: path, sha256, size, how it was selected, and the packaged commit |"
   echo "| outward_commands.md | the exact commands, none run |"
+  echo
+  echo "A folder that still holds a file named FAILED is not a gate package: that marker is written first"
+  echo "and removed only after every check passed and this manifest was written."
   echo
   echo "## Verify this package"
   echo '```'
   echo "git clone history.bundle verify/"
   echo "cd verify && git log --oneline | head -1     # must equal COMMIT"
   echo "sha256sum -c ../tree.sha256                   # must be all OK"
+  echo "test ! -e ../FAILED                           # must hold: a FAILED file means the build never finished"
   echo '```'
 } > "$OUT/MANIFEST.md"
+}
 
 # ---- 6. final status: required artifacts + verifiable export + required-check
 # success. Round-3: the captured exit codes now gate — a failed make test,
 # make acceptance, validator run, or Day-3 stage refuses the package instead of
 # ending exit 0 with artifacts present. ----
 MISSING=""
-for f in COMMIT HEAD.txt history.txt history.bundle tree.sha256 reproduction.log MANIFEST.md outward_commands.md day3_counts.json; do
+for f in COMMIT HEAD.txt history.txt history.bundle tree.sha256 reproduction.log outward_commands.md day3_counts.json; do
   [ -s "$OUT/$f" ] || MISSING="$MISSING $f"
 done
 if ! git bundle verify "$OUT/history.bundle" >/dev/null 2>&1; then
@@ -287,7 +380,17 @@ fi
 [ "${VAL_EXIT:-1}" -eq 0 ] || FAILED="$FAILED validator(${VAL_EXIT:-?})"
 [ "${DAY3_EXIT:-1}" -eq 0 ] || FAILED="$FAILED day3(${DAY3_EXIT:-?})"
 if [ -n "$MISSING" ] || [ -n "$FAILED" ]; then
+  echo "reason: missing/unverifiable:$MISSING failed-checks:$FAILED" >> "$FAILED_MARK" 2>/dev/null
   echo "REFUSING: package failed — missing/unverifiable:$MISSING failed-checks:$FAILED" >&2
+  exit 3
+fi
+
+# Everything passed: now, and only now, the manifest — then the FAILED marker is removed LAST.
+write_manifest || abort_pkg "could not write MANIFEST.md"
+[ -s "$OUT/MANIFEST.md" ] || abort_pkg "MANIFEST.md is empty"
+rm -f -- "$FAILED_MARK"
+if [ -e "$FAILED_MARK" ] || [ -L "$FAILED_MARK" ]; then
+  echo "REFUSING: package failed — could not remove the FAILED marker $FAILED_MARK" >&2
   exit 3
 fi
 
