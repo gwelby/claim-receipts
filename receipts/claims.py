@@ -4,9 +4,10 @@ This summary reports EVIDENCE ONLY: the files this session provably changed and 
 It does not judge claims; the per-claim verdicts are made at session end (`receipt.py`, `judge.py`)
 and written to the receipt artifact.
 
-Saying which day of work a feature is on, in the code, is deliberate: a summary that quietly implies
-it has checked the claims when it has only listed the evidence would be the plugin committing the
-exact error it exists to catch.
+Saying so in the summary itself is deliberate: a summary that quietly implies it has checked the
+claims when it has only listed the evidence would be the plugin committing the exact error it exists
+to catch. (The line used to say "Claim reconciliation: Day 2." — a stale build-plan date that read as
+a promise about a feature that has since shipped in `receipt.py`.)
 """
 from __future__ import annotations
 
@@ -65,5 +66,6 @@ def render_session_summary(session_id: str = "", task_id: str = "") -> str:
             flag = "ok " if status in (None, "ok") else str(status)[:8]
             lines.append(f"  ran [{flag}] {cmd[:110]}")
     lines.append("")
-    lines.append("These are facts from the filesystem, not claims. Claim reconciliation: Day 2.")
+    lines.append("These are facts from the filesystem, not claims. No claim is judged here; "
+                 "per-claim verdicts are written to the receipt at session end.")
     return "\n".join(lines)

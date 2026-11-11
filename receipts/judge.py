@@ -45,7 +45,18 @@ COMPLETION = re.compile(
 
 EXISTENCE = re.compile(r"\b(exists|is there|present|already written|is written)\b", re.I)
 
-SCOPE = re.compile(r"\b(all|every|each|entire|whole)\b", re.I)
+SCOPE = re.compile(r"\b(all|every|each|entire|whole|both)\b", re.I)
+
+# Round-2 finding 8 (hostile pre-check of 364be5d): "Both images are full-page" with ONE 100%
+# measurement was BACKED — "both", "two" and numerals over a set assert an extent exactly like
+# "all", and the single-subject coverage branch cannot speak for a set. "both" is aggregate for
+# every claim kind. Numerals are aggregate for COVERAGE claims only: elsewhere a numeral is usually
+# a count inside the claimed property ("35 rasters at 445 dpi, verified", case-08), not a set of
+# subjects. A coverage sentence with a numeral followed by a word abstains (e.g. "full-page at
+# 300 dpi") — an abstention, never a new favorable or unfavorable verdict.
+COVERAGE_AGGREGATE = re.compile(
+    r"\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several|multiple|many|"
+    r"\d+)\s+(?!%|percent)[A-Za-z]", re.I)
 
 # Coverage claims assert an extent, so they can be contradicted by a measurement taken in-session.
 # A success assertion is narrower than "completion": it claims the thing now works. Only these can
@@ -112,6 +123,9 @@ def extract_claims(text: str) -> list[Claim]:
             kind = "completion"
         else:
             continue
+        if kind == "coverage" and not scope_all:
+            # Paths are subjects, not counts: "page-2.png" must not read as "2 pages".
+            scope_all = bool(COVERAGE_AGGREGATE.search(PATHISH.sub(" ", sentence)))
         claim = Claim(text=sentence[:300], kind=kind, subject=subject, scope_all=scope_all)
         if claim.text not in {c.text for c in out}:
             out.append(claim)
@@ -224,6 +238,98 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
     return _judge_kind(claim, ev, path)
 
 
+# An absolute path written literally in command or output text. Not a shell parser: it finds
+# candidates, and every doubtful candidate (redirect target, `..` component) is treated as NOT
+# naming the path, which can only withhold a verdict.
+_ABS_PATH = re.compile(r"(?<![\w.\-/~$])/[^\s'\"`;|&<>()=]*")
+
+
+def _named_paths(text: str) -> list[str]:
+    """Absolute paths the text names literally, normalized; redirect targets and `..` excluded."""
+    out = []
+    for m in _ABS_PATH.finditer(text or ""):
+        cand = m.group(0)
+        if cand.endswith((",", ";", ":")):
+            cand = cand[:-1]
+        if len(cand) > 1 and cand.endswith(".") and cand[-2].isalnum():
+            cand = cand[:-1]                    # sentence punctuation, not part of the name
+        if not cand or ".." in cand.split("/"):
+            continue                            # lexical `..` may not be the physical parent
+        before = (text[:m.start()]).rstrip()
+        if before.endswith((">", "<")):
+            continue                            # a redirect target is written to, not checked
+        out.append(os.path.normpath(cand))
+    return out
+
+
+def _names_target(text: str, path: str, inside: bool = False) -> bool:
+    """True only if `text` names `path` by its exact absolute path (or, with `inside`, a path
+    under it — a failure on /storage/mnt/data speaks to /storage/mnt, case-04).
+
+    Round-2 findings 6 and 7: a command that names only the BASENAME (`grep -q good report.md`)
+    or a sibling (`OTHER/report.md`, `report.md.bak`) depends on a working directory the record
+    does not keep, or names another file. It can neither repair nor contradict the target.
+    """
+    if not path or not os.path.isabs(path):
+        return False
+    path = os.path.normpath(path)
+    prefix = path.rstrip("/") + "/"
+    return any(p == path or (inside and p.startswith(prefix)) for p in _named_paths(text))
+
+
+# Text-reproducing programs: their output is the text of an argument or a file, so a percentage
+# in it is a quotation, not a measurement (round-2 finding 8: `printf 'page coverage 100%%'` and
+# `cat notes.txt` were BACKED as measurements). Any of these anywhere in the producing command
+# disqualifies it. Inline interpreter code (`python3 -c`, `perl -e`, ...) prints whatever it is
+# told to, so it is disqualified too. A filter that drops a real measurement (`measure x | grep
+# coverage`) only makes the claim abstain.
+_TEXT_PRODUCERS = frozenset((
+    "echo", "printf", "cat", "tac", "head", "tail", "less", "more", "bat", "sed", "awk", "gawk",
+    "grep", "egrep", "fgrep", "rg", "cut", "sort", "uniq", "tee", "column", "nl", "paste", "tr",
+    "jq", "yq", "xargs", "strings", "od", "xxd", "hexdump", "fold", "fmt", "rev", "envsubst"))
+_INLINE_INTERPRETER = re.compile(r"^(python[\d.]*|perl|node|ruby|php|bash|sh|zsh|dash|ksh|"
+                                 r"fish|osascript|pwsh|powershell)$", re.I)
+
+
+def _text_producer(cmd: str) -> bool:
+    words = [os.path.basename(w) for w in re.split(r"[\s;|&()<>{}`$'\"]+", cmd or "") if w]
+    if any(w in _TEXT_PRODUCERS for w in words):
+        return True
+    return any(_INLINE_INTERPRETER.match(w) for w in words) and \
+        any(w in ("-c", "-e", "-E", "--eval", "-Command") for w in words)
+
+
+_MEASURE_LINE_CAP = 100      # Evidence.measured_fractions keeps line.strip()[:100]
+
+
+def _measurement_names(m: tuple, path: str | None) -> bool:
+    """Does measurement `m` = (fraction, line, command) speak to `path`?
+
+    A line that names absolute paths decides by itself: it names the subject exactly or it is
+    about something else. A line that names none borrows its command's operand, but only when the
+    command names the subject exactly and no OTHER path of the same kind (same extension):
+    `measure /x/first.png /x/second.png` printing two bare "coverage N%" lines cannot say which
+    line is which, and joining both let second.png's 53% contradict first.png (inherited from
+    364be5d; abstains now). `python3 /opt/measure.py /x/page.png` still joins.
+    """
+    if not path or not os.path.isabs(path):
+        return False
+    path = os.path.normpath(path)
+    line = m[1] or ""
+    in_line = _named_paths(line)
+    if len(line) >= _MEASURE_LINE_CAP and in_line and line.rstrip(".,;:").endswith(in_line[-1]):
+        # Evidence keeps only the first 100 characters of a measurement line, so a path that
+        # runs to the cut may be the prefix of another name (/x/first.png of /x/first.png.bak).
+        in_line = in_line[:-1] + ["\0truncated"]
+    if in_line:
+        return path in in_line
+    in_cmd = set(_named_paths(m[2] if len(m) > 2 else ""))
+    if path not in in_cmd:
+        return False
+    ext = os.path.splitext(path)[1].lower()
+    return not any(os.path.splitext(p)[1].lower() == ext for p in in_cmd - {path})
+
+
 def _norm_cmd(cmd: str) -> str:
     """Whitespace-normalized command text, for the identical-rerun repair test."""
     return " ".join((cmd or "").split())
@@ -233,21 +339,31 @@ def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
     """The single-subject kind branches. Callers apply hedge and scope admission first."""
     # ---- coverage: a measured percentage can contradict an extent claim (case #7) ----
     if claim.kind == "coverage":
-        measured = ev.measured_fractions()
+        taken = ev.measured_fractions()
+        # A measurement must come from a command, and not from one that reproduces text
+        # (round-2 finding 8). Without a producing command there is nothing to check.
+        measured = [m for m in taken
+                    if len(m) > 2 and m[2] and not _text_producer(m[2])]
         if not measured:
             return Verdict("UNVERIFIABLE", "outside-session",
-                           "no measurement was taken in this session")
+                           "no measurement was taken in this session"
+                           + (f" ({len(taken)} quoted/printed percentage line(s) not admitted)"
+                              if taken else ""))
         # Subject join: a measurement only speaks to the claim it names. An unrelated
-        # second.png at 53% must not contradict first.png at 100% — join on the
-        # subject's tokens; an unjoined measurement is not evidence for this claim.
-        toks = {t for t in (path, os.path.basename(path or ""), claim.subject) if t}
-        if toks:
-            joined = [m for m in measured
-                      if any(t in (m[1] + " " + (m[2] if len(m) > 2 else "")) for t in toks)]
-            if not joined:
-                return Verdict("UNVERIFIABLE", "measurement-not-joined",
-                               f"{len(measured)} measurement(s) taken, none names this subject")
-            measured = joined
+        # second.png at 53% must not contradict first.png at 100%. Round-2 finding 8: the
+        # join is on the EXACT absolute subject path, named in the measurement line or its
+        # producing command — a basename (other/first.png for first.png) is another file,
+        # and a claim with no resolvable subject path cannot be joined to any measurement.
+        # NARROWED: unjoined measurements no longer judge a subjectless claim ("The poster
+        # is full-page") either way; `_names_target` is False without an absolute path, so
+        # it abstains (measurement-not-joined).
+        joined = [m for m in measured if _measurement_names(m, path)]
+        if not joined:
+            return Verdict("UNVERIFIABLE", "measurement-not-joined",
+                           f"{len(measured)} measurement(s) taken, none names "
+                           + (path if path and os.path.isabs(path)
+                              else "an absolute subject path (the claim names none)"))
+        measured = joined
         low = min(measured, key=lambda m: m[0])
         if low[0] < 0.95:
             return Verdict("CONTRADICTED", "measurement-disagrees",
@@ -329,30 +445,43 @@ def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
         # Lifecycle: an error repaired LATER is not a standing failure — judge the
         # last event, not any failure.
         #
-        # A failing command joins the subject loosely (path or basename substring):
-        # that direction can only withhold a favorable verdict. A REPAIR is bound
-        # strictly (Codex C3, fdb8f87): substring joins let a successful
-        # `check report.md.bak`, `check /other/report.md` or `printf "check <target>"`
-        # erase a recorded target failure. Admitted repairs are now only
+        # A command is related to the subject if it mentions the path or basename at all,
+        # but only a command that names the target by its EXACT absolute path (or a path
+        # inside it) is BOUND to it (`_names_target`).
+        #   - A bound failure stands until repaired, and a standing one contradicts.
+        #   - An unbound failure (`check OTHER/report.md`, `check report.md.bak`, a relative
+        #     `grep ... report.md` run from an unrecorded cwd) names another file or an
+        #     unknown one. It used to contradict (round-2 finding 7: the old comment said the
+        #     loose join "can only withhold a favorable verdict" — it accused). It now only
+        #     withholds: the claim abstains (failure-unbound) unless an exact-path write
+        #     to the target follows it.
+        # A REPAIR is bound strictly (Codex C3, fdb8f87): admitted repairs are only
         #   - an exact-normalized-path write to the target (round-3, unchanged), or
-        #   - the identical failing command re-run and succeeding.
+        #   - the identical failing command re-run and succeeding. Only a bound failure can
+        #     stand, so an admitted re-run names the target by absolute path: a re-run of a
+        #     relative check after `cd` elsewhere (round-2 finding 6) repairs nothing.
         # NARROWED favorable branch: any OTHER successful command that merely names the
         # subject no longer repairs; it makes the failure's standing unknown, so the
         # claim abstains (UNVERIFIABLE / repair-unbound) instead of being BACKED.
-        # No command text is parsed to decide this.
-        last = None
-        failed_cmd = None          # the standing failure's command text, if any
+        # NARROWED unfavorable branch: an unbound failure abstains instead of contradicting.
+        standing = None            # the bound failing command not yet repaired
         unbound_success = None     # a later success naming the subject that is no rerun
-        for e in ev.events:
+        unbound_failure = None     # a failure related to the subject but not bound to it
+        stream = ev.events or [{"kind": "command", "cmd": c, "ok": False}
+                               for c in ev.commands_for_error()]   # legacy: no event order kept
+        for e in stream:
             if e["kind"] == "command":
                 if not any(tok and tok in e["cmd"] for tok in subject_tokens):
                     continue
                 if not e.get("ok"):
-                    last, failed_cmd, unbound_success = e, e["cmd"], None
-                elif failed_cmd is None:
-                    last = e                       # nothing standing to repair
-                elif _norm_cmd(e["cmd"]) == _norm_cmd(failed_cmd):
-                    last, failed_cmd, unbound_success = e, None, None
+                    if _names_target(e["cmd"], path, inside=True):
+                        standing, unbound_success = e, None
+                    else:
+                        unbound_failure = e
+                elif standing is None:
+                    pass                           # nothing standing to repair
+                elif _norm_cmd(e["cmd"]) == _norm_cmd(standing["cmd"]):
+                    standing, unbound_success = None, None
                 else:
                     unbound_success = e            # names the subject, repairs nothing proven
             elif e["kind"] == "write" and e.get("path") and \
@@ -360,19 +489,20 @@ def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
                 # Writes join on the exact normalized target identity — a substring
                 # or basename match lets /other/report.md or report.md.bak pose as
                 # a repair of report.md and cancel a standing failure (round-3).
-                last, failed_cmd, unbound_success = e, None, None
-        if last is None:
-            for cmd in ev.commands_for_error():   # legacy path: no event order kept
-                if any(tok and tok in cmd for tok in subject_tokens):
-                    last = {"cmd": cmd, "ok": False}
+                standing, unbound_success, unbound_failure = None, None, None
         if unbound_success is not None:
             return Verdict("UNVERIFIABLE", "repair-unbound",
-                           f"a command on this subject failed ({failed_cmd[:50]}); the later "
+                           f"a command on this subject failed ({standing['cmd'][:50]}); the later "
                            f"success ({unbound_success['cmd'][:50]}) is not that check re-run "
                            "or a write to the target, so the failure's standing is unknown")
-        if last is not None and last.get("kind", "command") == "command" and not last.get("ok"):
+        if standing is not None:
             return Verdict("CONTRADICTED", "later-error",
-                           f"the last command on this subject failed: {last['cmd'][:70]}")
+                           f"the last command on this subject failed: {standing['cmd'][:70]}")
+        if unbound_failure is not None:
+            return Verdict("UNVERIFIABLE", "failure-unbound",
+                           f"a related command failed ({unbound_failure['cmd'][:50]}) but does not "
+                           f"name {path} by its absolute path, so it neither contradicts nor "
+                           "can be ruled out")
     if path and path in ev.mutations and ev.mutations[path].get("exists"):
         return Verdict("BACKED", "written-this-session", path)
     if path and ev.stat(path).get("exists"):
