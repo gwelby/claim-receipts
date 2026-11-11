@@ -55,12 +55,17 @@ abstains (`unverifiable`) rather than guess in the flattering direction.
 - **A listing proves absence only in a narrow form**: a successful, complete, un-cut `ls` or `find` of
   one absolute path, in an allowed form. Anything else (other flags, several paths, quoting it cannot
   read, a cut result) abstains.
-- **A hedge needs its observation**: a successful read or listing naming the exact path. Hedging alone,
-  or a command that merely names a similar file, earns nothing.
+- **Hedging alone earns nothing**, nor does a command that merely names a similar file.
 - **A repair must be the same check run again.** A failure counts only when it names the exact path;
   only an identical re-run repairs it. A *different* successful command, or a failure on a look-alike
   path, abstains.
-- **Paths must be absolute to be bound.** A relative path in a claim or a command is not matched.
+- **How a claim finds its file.** An absolute path is used as written. A bare file name (`app.py`) is
+  matched to a file the session changed or saw with that name, preferring one it changed. A relative path
+  with a folder (`docs/app.py`), a relative hedge subject, and relative paths inside commands are not
+  matched: they abstain.
+- **A hedge needs its observation.** A hedge about a named file needs a successful read or listing of
+  that exact path. A hedge that names no file is backed only by an observe tool such as `web_search`,
+  never by an arbitrary command.
 - **"All" is not proved by one.** A coverage claim over a set needs the whole set judged; one passing
   member abstains.
 - **The Day-3 ratio is a verdict share, not a false-positive rate.** It has no independent truth labels.

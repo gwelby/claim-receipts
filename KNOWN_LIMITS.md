@@ -65,7 +65,8 @@ live session (the ledger keeps no row for it, so it is read from the session rec
 original case-06 could pass only in the fixture. A search the host marked as an error backs nothing.
 
 **Settled from Hermes's source** (v0.23.0 `model_tools.py` `_emit_post_tool_call_hook` and
-`agent/display.py` `_detect_tool_failure`; read, not run live): when a tool gives no status, Hermes
+`agent/display.py` `_detect_tool_failure`; read by the integrator, not run live, and not re-read by the
+independent passes, which were kept out of the Hermes install): when a tool gives no status, Hermes
 derives it, and a terminal command with a nonzero exit reaches the hook as `status: error`.
 
 ## Still open, named
@@ -74,6 +75,18 @@ derives it, and a terminal command with a nonzero exit reaches the hook as `stat
 - **A script that creates the target without naming it** (`python build.py`) after a listing is not
   seen; the listing still speaks for the path.
 - **Column `ls` output** with a name containing two spaces is not caught.
+- **A scope word anywhere in a sentence makes it abstain.** "Fixed app.py; all tests pass" abstains
+  (`scope-unbindable`) even with a recorded write, because "all" is read as a claim over a set.
+- **An ALL-CAPS word in a hedge is taken as its subject.** "I could not verify the API key works" is
+  scoped to `API` and cannot be backed; the same sentence without it can.
+- **"Identical re-run" is identical text.** The same command re-run from another folder, against a
+  different script with the same name, counts as the repair.
+- **The fixture hash is checked against a record in the same commit.** It catches accidental drift
+  between the fixture and its record, not a deliberate change to both.
+- **Usefulness, measured by an independent pass on realistic synthetic sessions (2026-11-11):** about
+  56% of genuine claims were backed (write-and-test 10/17, list-and-"missing" 10/19, read-and-hedge
+  9/16); most of the rest abstain on shapes the plugin does not read (`2>/dev/null`, `| head`,
+  `cd X && ls`, `find -type f`, `sed -n`). Abstaining is the intended failure; a false verdict is not.
 - **The text-producer list is a denylist.** An unlisted program whose only job is to print
   "coverage 100%" would still be read as a measurement.
 - **Day-3 counts are bound to a receipt, not to a plugin commit.** A receipt does not record which
