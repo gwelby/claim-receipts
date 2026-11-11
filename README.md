@@ -1,4 +1,4 @@
-# receipts
+# claim-receipts
 
 Evidence for agent sessions, checked against the filesystem.
 
@@ -63,7 +63,7 @@ Full itemised list with locators: `KNOWN_LIMITS.md`.
 
 Verdict vocabulary follows **Noet Standards — Receipt v0.1**:
 
-- Repo: `gwelby/noet-standards` · **spec: Noet Standards (release pending)** — this link is deliberately
+- Repo: `gwelby/noet` · **spec: Noet Standards (release pending)** — this link is deliberately
   not a URL until the release gate has passed and a tag exists. A dead link in a README about verification
   would be its own joke.
 
@@ -78,16 +78,26 @@ We want the cases where it says **backed** and should not. Wrong verdicts become
 
 ## Install
 
+Tested on Hermes Agent v0.23.0.
+
 ```bash
-cp -r hermes-plugin-receipts ~/.hermes/plugins/receipts
-hermes plugins enable receipts       # hot-loads hooks; no restart needed
+hermes plugins install gwelby/claim-receipts --ref <the 40-character commit in the catalog entry>
+hermes plugins enable claim-receipts       # hot-loads hooks; no restart needed
 ```
 
-Disable any time with `hermes plugins disable receipts`.
+Then `/claim-receipts` in a session shows what it has proven so far. Disable any time with
+`hermes plugins disable claim-receipts`. (The catalog key and the plugin are both `claim-receipts`:
+another plugin already uses the name `receipts`.)
 
-## Privacy — what is stored
+## Privacy — what is read and what is stored
 
 Everything stays on your machine. No network calls, no telemetry, no credentials.
+
+**It reads Hermes's own session database**, `~/.hermes/state.db`, at session end, to bind each
+command's output to the command that produced it. It opens the file read-only (SQLite `mode=ro`),
+reads only the current session's newest messages (at most 600, and at most 20,000 characters of each
+tool result), and never writes to it. `RECEIPTS_TRANSCRIPT_DB` points it at another file. That is a
+read outside the plugin's own data, so it is stated here.
 
 The ledger records local file paths, sizes and mtimes — **which means it records the names of the files
 you work on** — and it records **the command strings of terminal calls**, which can themselves contain
