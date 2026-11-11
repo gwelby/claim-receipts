@@ -69,6 +69,37 @@ original case-06 could pass only in the fixture. A search the host marked as an 
 independent passes, which were kept out of the Hermes install): when a tool gives no status, Hermes
 derives it, and a terminal command with a nonzero exit reaches the hook as `status: error`.
 
+## Second independent pass (2026-11-11)
+
+A second attacker, on a different model, then attacked the result. It found one more blocker and a set
+of false verdicts, the worst of them false `contradicted` on honest work. All are answered, each with a
+control in `tests/test_judge_round3.py`, `tests/test_fable_06ac15a_evidence.py` or
+`tests/test_gate_package_binding.py`; the first attacker's 42 cases still hold.
+
+| Found | Now |
+|---|---|
+| A heredoc-fed interpreter (`python3 - IMG <<EOF … print('coverage 100%')`) forged a coverage verdict | A measurement whose command cannot be segmented (heredoc, `$( )`, backticks, `&`) or runs inline code (`-c`, `-e`, `python3 -`, an interpreter reading stdin) is not admitted |
+| `grep`, `diff`, `cmp`, `test`, `[` or `git diff --exit-code` exiting 1 was read as a failure: "Fixed app.py" was contradicted after `grep -c TODO app.py` found none | Exit 1 of those verbs is a result. In the lifecycle it abstains (`exit-is-result`). For a hedge, a single-segment `grep`/`rg` that ran and found nothing counts as an observation |
+| A hedge about anything ("could not verify the layout") was contradicted because the file was written | `was-confirmable` needs existence wording in the hedge |
+| "margins 5%" was read as page coverage | Each percentage belongs to its own clause; a clause naming a complement (margin, whitespace, blank, padding, border, dpi) is not a measurement |
+| A path in `echo`/`printf` text, or inside inline code, bound a failure | A failure ties to the target only through whole path arguments of commands that actually ran |
+| A `python3 -c` write of the target after a listing left absence backed | A segment running inline interpreter code stales every earlier listing |
+| A `grep` pattern counted as an observed file; `[ -f T ]` after a listing staled it | Only grep/rg file operands count; `[` and `[[` are read-only |
+| Package Day-3 counts could disagree with the receipt's own verdicts; files the checks added inside the export went unseen | Counts are recounted against the verdict list (and must sum to `judged`); the export is enumerated again after the checks. The checks run without writing bytecode, because the validator otherwise leaves `.pyc` files there |
+
+**Narrowed by this round:** a real "not fixed" signal from `cmp golden T` or `test -s T` exiting 1 now
+abstains instead of contradicting (the record keeps ok/error, not the exit code, so exit 1 and exit 2
+cannot be told apart); a hedge that is not about existence is never `was-confirmable`; any interpreter
+run with `-c`, `-e`, `-p` or `-r` style flags counts as inline code, even a harmless `bash -e script.sh`;
+a measurement printed by a wrapped or stdin-fed interpreter is not admitted; "coverage 53% margins 0"
+with no separator abstains.
+
+**Widened by this round:** a listing followed by `[`/`[[` can back absence; a single-segment `grep`/`rg`
+that exits 1 can back a hedge naming its file; "ink coverage 100%, margins 5%" is now `backed`.
+
+**The Day-3 check is internal consistency only.** A receipt edited so that its counts and its verdict
+list agree still passes; a receipt with no verdict list gets only the sum check.
+
 ## Still open, named
 
 - **Native case08 stays UNJUDGED** without subject injection, as the audit recorded.

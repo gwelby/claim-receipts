@@ -366,7 +366,8 @@ Nothing below has been run. The repository does not exist; there are no remotes.
 ## Preconditions, per the publish gate
 - [ ] Codex reviews this package and PASSES (not self-check)
 - [ ] held-out acceptance set scored (not the author's own fixtures)
-- [ ] disclosure review: no internal paths, seat names, register ids, hostnames, IPs, keys
+- [ ] disclosure review: no internal paths, register ids, hostnames, IPs or keys in files or commit
+      messages (naming the auditors who checked the work, as KNOWN_LIMITS does, is intended)
 EOF
 
 # ---- 5. the manifest — WRITTEN ONLY AFTER SECTION 6 PASSES ----
