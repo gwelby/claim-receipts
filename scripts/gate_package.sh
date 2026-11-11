@@ -148,6 +148,10 @@ echo "$COMMIT" > "$OUT/COMMIT"
 TEST_EXIT=0; ACC_EXIT=0; VAL_EXIT=0
 {
   echo "# checks run in an export of $COMMIT (not the live tree)"
+  # No bytecode inside the export: the validator's capability probe imports the plugin, and its
+  # __pycache__ files would otherwise trip the "checks added files" guard below on every real run
+  # (measured 2026-11-11 on Hermes v0.23.0: three .pyc files without this, none with it).
+  export PYTHONDONTWRITEBYTECODE=1
   echo "### make test"; ( cd "$EXPORT" && make test ) 2>&1; TEST_EXIT=$?; echo "exit=$TEST_EXIT"
   echo; echo "### make acceptance"; ( cd "$EXPORT" && make acceptance ) 2>&1; ACC_EXIT=$?; echo "exit=$ACC_EXIT"
   echo; echo "### hermes plugins validate ."; ( cd "$EXPORT" && hermes plugins validate . ) 2>&1; VAL_EXIT=$?; echo "exit=$VAL_EXIT"
