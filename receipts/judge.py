@@ -446,12 +446,13 @@ def _measurement_names(m: tuple, path: str | None) -> bool:
 def _same_check(e: dict, standing: dict) -> bool:
     """Is event <e> the failing check <standing> run again?
 
-    Codex 2358d20 R1: identical TEXT is not an identical check. `python3 check.py /x/report.md`
-    run from folder A and from folder B runs two different check.py files. When both calls
-    recorded their folder, the folders must match. When either folder is unknown (Hermes does not
-    pass one to the hook for its terminal tool), the command may not depend on one: every operand
-    after the verb must be an option or an absolute path. NARROWED: a genuine repair checked with a
-    relative script and no recorded folder now abstains (`repair-unbound`).
+    Identical TEXT is not an identical check: `python3 check /x/report.md` run from folder A and
+    from folder B runs two different `check` programs (Codex 2358d20 R1; 6a6aae3 N1, an
+    extensionless script). A re-run counts only when BOTH calls recorded their folder and the
+    folders match. With either folder unknown (Hermes's terminal tool does not pass one to the
+    hook), the re-run counts only when nothing in it depends on a folder: every operand after the
+    program is an option or an absolute path. Any other word, `check` as much as `check.py` or a
+    `grep` pattern, refuses (fail closed); such a repair abstains (`repair-unbound`).
     """
     if _norm_cmd(e["cmd"]) != _norm_cmd(standing["cmd"]):
         return False
@@ -462,18 +463,13 @@ def _same_check(e: dict, standing: dict) -> bool:
     if segs is None:
         return False
     for sg in segs:
-        argv, _targets = _strip_redirects(sg.tokens)
+        argv, targets = _strip_redirects(sg.tokens)
+        if targets:
+            return False                     # a redirect target is a path the folder decides
         for t in argv[1:]:
-            if t.startswith("-"):
-                continue
-            if not os.path.isabs(t) and _PATHLIKE.search(t):
-                return False         # a relative path: it means something else in another folder
+            if not (t.startswith("-") or os.path.isabs(t)):
+                return False
     return True
-
-
-# An operand that names a file relative to the working folder: it contains a slash, or ends in a
-# file extension (`check.py`, `notes.md`). A bare word (`good` in `grep -q good /x/a`) does not.
-_PATHLIKE = re.compile(r"/|\.[A-Za-z0-9]{1,6}$")
 
 
 def _norm_cmd(cmd: str) -> str:

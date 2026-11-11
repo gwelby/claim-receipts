@@ -499,17 +499,16 @@ def _grep_files(args: list[str], verb: str = "grep") -> list[str]:
 _BOUNDED_MUTATORS = {"touch", "rm", "rmdir", "mkdir", "cp", "mv", "ln", "chmod", "chown", "truncate",
                      "tee", "unlink"}
 
-# git subcommands that only read the repository and the work tree.
-_GIT_READONLY = {"status", "log", "diff", "show", "ls-files", "rev-parse", "blame", "grep",
-                 "describe", "shortlog", "ls-tree", "cat-file"}
+_GIT_STATUS_OPTS = {"-s", "--short", "-b", "--branch", "-sb", "--porcelain", "--porcelain=v1",
+                    "--porcelain=v2", "-uno", "--untracked-files=no", "--ignored=no"}
 
 
-def _git_subcommand(args) -> str:
-    """git's subcommand, skipping global options (`-C DIR`, `-c k=v` take a value)."""
-    i, toks = 0, list(args)
-    while i < len(toks) and toks[i].startswith("-"):
-        i += 2 if toks[i] in ("-C", "-c") else 1
-    return toks[i] if i < len(toks) else ""
+def _git_status_only(args) -> bool:
+    """`git [-C DIR] status [known-harmless options]` and nothing else."""
+    toks = list(args)
+    if toks[:1] == ["-C"]:
+        toks = toks[2:]
+    return toks[:1] == ["status"] and all(t in _GIT_STATUS_OPTS for t in toks[1:])
 
 
 def _touches_in(cmd: str) -> list[tuple[int, tuple]]:
@@ -532,8 +531,11 @@ def _touches_in(cmd: str) -> list[tuple[int, tuple]]:
             continue
         verb = seg.tokens[0]
         args, targets = _strip_redirects(seg.tokens[1:])
+        # git: even a reading subcommand can write (`git diff --output=T`, Codex 6a6aae3 N2). Only
+        # `git status` with options from a short known-harmless list is read-only (fail closed);
+        # every other git invocation stales the listing.
         readonly = (verb in _READONLY_VERBS and not (verb == "find" and set(args) & _FIND_WRITES)) \
-            or (verb == "git" and _git_subcommand(args) in _GIT_READONLY)
+            or (verb == "git" and _git_status_only(args))
         if not readonly and verb not in _BOUNDED_MUTATORS:
             # Codex 2358d20 R2: a command that is neither known to only look nor known to change
             # only what it names may create, restore or remove files it never names (`git checkout
@@ -1098,7 +1100,7 @@ class Evidence:
             self.observed.append({"verb": verb, "operands": operands, "ok": ok and bound,
                                   "call_id": rec.get("tool_call_id") or None,
                                   "result_exit1": result_exit1})
-        self.command_events.append({"cmd": cmd, "ok": ok})
+        self.command_events.append({"cmd": cmd, "ok": ok, "call_id": rec.get("tool_call_id") or None})
         self.events.append({"kind": "command", "cmd": cmd, "ok": ok, "cwd": rec.get("cwd") or None})
         self.commands.append(cmd)
         if not ok:
@@ -1151,10 +1153,20 @@ class Evidence:
             # gives no measurement.
             done = item.get("ok")
             if done is None and cmd:
-                # The output carries no status of its own: use the hook's record of the same
-                # command, which saw how the producer ended. Every record of it must have succeeded.
-                seen = [ev["ok"] for ev in self.command_events if ev["cmd"] == cmd]
-                done = bool(seen) and all(seen)
+                # The output carries no status of its own: use the hook's record of the PRODUCING
+                # call. Native outputs bind by call id only (Codex 6a6aae3 N3: an earlier same-text
+                # call's success must not lend itself to a later output). Only when neither side
+                # has a call id may the text join, and only if exactly one output and exactly one
+                # record of that command exist, so nothing can be borrowed.
+                cid = item.get("call_id")
+                if cid:
+                    seen = [ev["ok"] for ev in self.command_events if ev.get("call_id") == cid]
+                    done = len(seen) == 1 and seen[0] is True
+                else:
+                    seen = [ev for ev in self.command_events if ev["cmd"] == cmd]
+                    outs = [o for o in self.tool_outputs if (o.get("command") or "") == cmd]
+                    done = (len(seen) == 1 and not seen[0].get("call_id") and len(outs) == 1
+                            and seen[0]["ok"] is True)
             if done is not True or item.get("truncated"):
                 continue
             if cmd:

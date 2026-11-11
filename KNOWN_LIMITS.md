@@ -119,6 +119,23 @@ that must stay `backed`) adopted as `tests/test_codex_2358d20_residuals.py`; on 
 terminal tool does not pass the folder to the hook; a listing followed by an arbitrary program
 (`python3 -m py_compile OTHER`, `make`, `pytest`) abstains.
 
+## Codex's targeted recheck of 6a6aae3 (2026-11-11)
+
+Codex closed all eight of its 2358d20 cases and found three neighbours of the same rules. Following its
+advice ("a fail-closed supported shape rather than one more spelling rule"), each rule now admits only a
+shape it can support, and refuses everything else. Codex's six neighbour cases (three of them positives)
+are adopted as `tests/test_codex_6a6aae3_neighbours.py`; on 6a6aae3 it fails 3/6.
+
+| Codex case | Now (fail closed) |
+|---|---|
+| N1: `python3 check /x/report.md`, an extensionless relative script, re-run from another folder with no folder recorded | With a folder unknown, a re-run repairs only if every operand after the program is an option or an absolute path; any other word refuses |
+| N2: `git diff --output=TARGET` after a listing, through a whitelisted "read-only" git subcommand | Only `git [-C DIR] status` with options from a short known-harmless list is read-only; every other git command stales the listing |
+| N3: an output with no status of its own borrowed the success of an earlier call with the same text | Its status comes from the hook's record of its own call id; only when neither side has a call id may the text join, and only with exactly one output and one record of that command |
+
+**Narrowed by this round:** a re-run check that names a pattern or any relative word (`grep -q good
+/x/app.py`) no longer repairs without a recorded folder; `git log`, `git diff` and the rest stale a
+listing.
+
 ## Still open, named
 
 - **Native case08 stays UNJUDGED** without subject injection, as the audit recorded.
