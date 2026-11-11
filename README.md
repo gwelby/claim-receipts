@@ -57,8 +57,10 @@ abstains (`unverifiable`) rather than guess in the flattering direction.
   read, a cut result) abstains.
 - **A hedge needs its observation**: a successful read or listing naming the exact path. Hedging alone,
   or a command that merely names a similar file, earns nothing.
-- **A repair must be the same check run again.** A failure followed by a *different* successful command
-  abstains rather than counting as repaired.
+- **A repair must be the same check run again.** A failure counts only when it names the exact path;
+  only an identical re-run repairs it. A *different* successful command, or a failure on a look-alike
+  path, abstains.
+- **Paths must be absolute to be bound.** A relative path in a claim or a command is not matched.
 - **"All" is not proved by one.** A coverage claim over a set needs the whole set judged; one passing
   member abstains.
 - **The Day-3 ratio is a verdict share, not a false-positive rate.** It has no independent truth labels.

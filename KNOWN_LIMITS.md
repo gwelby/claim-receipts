@@ -35,11 +35,47 @@ commit is the return for those six. It has **not** yet been rechecked by Codex. 
 | C5 | Package success was not bound to complete commit bytes: a failed or partial export, a missing checksum, or checks run on changed live files still ended 0. | **Repaired.** The file list comes from the pinned commit; export and hash failures abort; the export must match the commit's files exactly; the checks run inside that export and are re-verified after; at the end the tree, index and bundle must still equal the commit. **Output policy:** only the sanctioned `GATE_PACKAGE` folder is ever replaced; any other existing output path is refused (exit 2), empty or not, and a read error is never taken as "empty". | `test_gate_package_binding.py` |
 | C6 | This file and the README did not match the audit. | This rewrite, and the README's limits section. | — |
 
+## Hostile pre-check before the recheck (2026-11-10)
+
+Before asking Codex to recheck, an independent attacker was set on this return. It found three
+blocker-class defects (two of them regressions introduced by the return itself) and seven more.
+All are now answered by abstention, each with a control in `tests/test_hostile_364be5d.py` or
+`tests/test_judge_round2.py`; the attacker's own 42 attack cases all hold.
+
+| Found | Now |
+|---|---|
+| Conflicting `ls` format flags (`-lC`, `-1x`) read a present file as absent | Two format flags together: the listing abstains. An `ls -l` row that is not the plain 9-field shape (device files, ISO dates, other locales, names with spaces) abstains |
+| A symlinked root or subfolder, or `..` in a path, read a present file as absent | Any symlink from the listing root down to the claimed folder, or `..` in an operand: abstains. Symlinks are checked when the receipt is built, not when the listing ran |
+| A relative-path hedge was backed by a same-named file elsewhere | A relative hedge subject never matches |
+| A heredoc body, `&`, a redirect target, or a failure followed by `; true` / `\|\| true` counted as an observation | Heredocs, herestrings and a lone `&` abstain. A segment counts as succeeded only if no `;`, `\|\|` or `\|` follows it and no `\|\|` comes before it |
+| An unscoped hedge was backed by any unrelated command | Unscoped hedges are backed only by an observe-tool call such as `web_search`; terminal commands and single-path reads no longer count |
+| An "identical" re-run in another folder repaired a failure; a failure on a look-alike path accused | A failure counts only on the exact absolute path (or a path inside it), and only an identical re-run repairs it; other failures abstain (`failure-unbound`) |
+| A coverage figure printed by `printf`/`cat`, matched by file name, or over "both" | Measurements from text-reproducing commands or inline code abstain; a measurement joins only on the exact absolute path; "both" and numerals over a set are aggregate scope and abstain unless the whole set is judged |
+| A listing then a later `touch`, `rm` or `: >` of the target | A listing no longer speaks for a path that a later command names, or a folder above it, a glob, or a command that cannot be read |
+| Day-3 counts could come from another session's receipt; a failed package looked complete | See the package rows below |
+
+**Narrowed by this round** (a favourable verdict removed): unscoped hedges after terminal-only
+evidence; coverage claims that name no file (production no longer judges them; the fixture passes
+only because it injects the subject); a real measurement piped through `grep` or printed by
+`python3 -c`; a real failure written with a relative path; any listing followed later in the session
+by a `$( )` or subshell (it is treated as stale, which can be broad).
+
+**Widened by this round:** a native `web_search` followed by an unscoped hedge is now `backed` on a
+live session (the ledger keeps no row for it, so it is read from the session record). Without this,
+original case-06 could pass only in the fixture. A search the host marked as an error backs nothing.
+
+**Settled from Hermes's source** (v0.23.0 `model_tools.py` `_emit_post_tool_call_hook` and
+`agent/display.py` `_detect_tool_failure`; read, not run live): when a tool gives no status, Hermes
+derives it, and a terminal command with a nonzero exit reaches the hook as `status: error`.
+
 ## Still open, named
 
 - **Native case08 stays UNJUDGED** without subject injection, as the audit recorded.
-- **After the newest listing,** a non-listing command (such as `rm`) is not taken into account.
-- **Column `ls` output** splits file names that contain spaces.
+- **A script that creates the target without naming it** (`python build.py`) after a listing is not
+  seen; the listing still speaks for the path.
+- **Column `ls` output** with a name containing two spaces is not caught.
+- **The text-producer list is a denylist.** An unlisted program whose only job is to print
+  "coverage 100%" would still be read as a measurement.
 - **The package bundle is created with `--all`.** Which refs go out is a disclosure decision for the release, not made here.
 - **The outward readback** in the generated commands is anonymous `ls-remote` on one ref; no public read has been run.
 - **The transcript join** was checked against Hermes's source and synthetic transcripts, not against a live Hermes host.
