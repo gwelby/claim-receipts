@@ -43,7 +43,8 @@ recorded.
 
 **The same check.** A later success is the failing check run again only when all of these hold:
 
-1. **both calls recorded their folder**, and the two folders are the same (after normalising);
+1. **both calls recorded their folder, complete**, and the two folders are the same (after normalising);
+   a folder the ledger flagged `cwd_cut`, or one stored at 1,000 characters or longer, never matches;
 2. **neither command was cut** by the ledger: neither carries the ledger's `command_cut` flag, and
    neither stored command is 2,000 characters or longer;
 3. **the two commands are equal character for character.** White space is not collapsed.

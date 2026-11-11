@@ -148,6 +148,7 @@ each fails its negative on 6dc1938.
 | M1: `python3 -mcheck /x/T`, identical text, folder unknown, loads a different module | A re-run repairs only when both calls recorded the same folder. **RETIRED explicitly:** every re-run repair with a folder unknown, including all-absolute ones, abstains; the adopted positive `r1_missing_cwd_absolute_script_positive` now expects abstention, and Codex's `exact_command_repair_positive` abstains too |
 | M2: whitespace collapsed inside a quoted argument | Commands are compared literally, character for character |
 | M3: two commands longer than the ledger's 2,000-character cap, equal before the cut | The ledger flags a command it cut; a cut (or possibly cut) command never repairs |
+| 4ea2e11 recheck: two different folders longer than the ledger's 1,000-character folder cap, equal before the cut | The ledger flags a folder it cut; a re-run from a cut (or possibly cut) folder never repairs. Adopted as `tests/test_codex_4ea2e11_cwd_identity.py` (fails its negative on 4ea2e11) |
 
 Writing the term definitions against the code found three more favourable verdicts the evidence did not
 support. All now fail closed:

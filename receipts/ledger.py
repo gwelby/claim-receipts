@@ -19,6 +19,9 @@ from typing import Any, Optional
 
 from . import paths as P
 
+# Longest working folder the ledger stores; a longer one is flagged cwd_cut (Codex 4ea2e11).
+_CWD_CAP = 1000
+
 _LOCK = threading.Lock()          # post_tool_call fires concurrently on parallel calls
 # call key -> {path: stat snapshot}. One structure, so a pre and its post can never come from
 # different bookkeeping generations.
@@ -99,6 +102,7 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
         command = None
         cut = False
         cwd = None
+        cwd_cut = False
         if tool_name == "terminal" and isinstance(args, dict):
             cmd = args.get("command")
             if isinstance(cmd, str) and cmd.strip():
@@ -109,7 +113,11 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
             # before a re-run may count as a repair.
             w = args.get("cwd") or args.get("workdir")
             if isinstance(w, str) and os.path.isabs(w):
-                cwd = os.path.normpath(w)[:1000]
+                full = os.path.normpath(w)
+                cwd = full[:_CWD_CAP]
+                # Codex 4ea2e11: two different long folders can share the stored prefix. Flag a cut
+                # folder; a re-run from a cut (or possibly cut) folder never repairs.
+                cwd_cut = len(full) > _CWD_CAP
 
         if not mutations and not command:
             return
@@ -118,7 +126,7 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "session_id": session_id, "task_id": task_id, "tool_call_id": tool_call_id,
             "tool": tool_name, "status": status, "duration_ms": duration_ms,
-            "mutations": mutations, "command": command, "cwd": cwd, "command_cut": cut,
+            "mutations": mutations, "command": command, "cwd": cwd, "cwd_cut": cwd_cut, "command_cut": cut,
         })
     except Exception:
         return

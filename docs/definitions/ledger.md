@@ -36,10 +36,11 @@ mutation is recorded, but downstream it is never treated as a certified write (s
 
 **How a command is recorded.** For a tool named `terminal`, the hook records the `command` argument
 (stripped, first 2,000 characters), and `command_cut: true` when the stripped command was longer than
-that. If the host passed an absolute `cwd` or `workdir`, that folder is recorded too. A command is never turned into a file change.
+that. If the host passed an absolute `cwd` or `workdir`, that folder is recorded too (first 1,000 characters, with
+`cwd_cut: true` when it was longer). A command is never turned into a file change.
 
 **What a record holds.** `ts`, `session_id`, `task_id`, `tool_call_id`, `tool`, `status` (as the host
-gave it), `duration_ms`, `mutations`, `command`, `cwd`, `command_cut`. A record is written only if it has at least one
+gave it), `duration_ms`, `mutations`, `command`, `cwd`, `cwd_cut`, `command_cut`. A record is written only if it has at least one
 mutation or a command.
 
 **End of session.** `on_session_end` appends one marker record: `{event: "session_end", records,

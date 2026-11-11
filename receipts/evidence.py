@@ -1102,7 +1102,8 @@ class Evidence:
                                   "result_exit1": result_exit1})
         self.command_events.append({"cmd": cmd, "ok": ok, "call_id": rec.get("tool_call_id") or None})
         self.events.append({"kind": "command", "cmd": cmd, "ok": ok, "cwd": rec.get("cwd") or None,
-                            "cut": bool(rec.get("command_cut"))})
+                            "cut": bool(rec.get("command_cut")),
+                            "cwd_cut": bool(rec.get("cwd_cut"))})
         self.commands.append(cmd)
         if not ok:
             self.failed_commands.append(cmd)

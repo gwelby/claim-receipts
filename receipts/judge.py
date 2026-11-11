@@ -482,6 +482,13 @@ def _same_check(e: dict, standing: dict) -> bool:
     a, b = e.get("cwd"), standing.get("cwd")
     if not (a and b) or os.path.normpath(a) != os.path.normpath(b):
         return False
+    # Codex 4ea2e11: the folder must be complete too. The ledger keeps at most _LEDGER_CWD_CAP
+    # characters; two different long folders share that prefix. A flagged or possibly cut folder
+    # (at the cap, e.g. from a ledger written before the flag existed) never repairs.
+    if e.get("cwd_cut") or standing.get("cwd_cut"):
+        return False
+    if len(a) >= _LEDGER_CWD_CAP or len(b) >= _LEDGER_CWD_CAP:
+        return False
     if e.get("cut") or standing.get("cut"):
         return False
     ca, cb = e.get("cmd") or "", standing.get("cmd") or ""
@@ -492,6 +499,7 @@ def _same_check(e: dict, standing: dict) -> bool:
 
 # ledger.py stores at most this many characters of a command (see post_tool_call).
 _LEDGER_COMMAND_CAP = 2000
+_LEDGER_CWD_CAP = 1000                            # ledger.py _CWD_CAP
 
 
 def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
