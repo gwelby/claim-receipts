@@ -97,10 +97,17 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
         # Terminal calls carry no reliable path prediction, so they are recorded as command
         # evidence instead: what ran, and how it ended. Never inferred as a file change.
         command = None
+        cwd = None
         if tool_name == "terminal" and isinstance(args, dict):
             cmd = args.get("command")
             if isinstance(cmd, str) and cmd.strip():
                 command = cmd.strip()[:2000]
+            # Codex 2358d20 R1: the same command text run from another folder is another check
+            # (a different check.py). Keep the folder when the host passes one; it is compared
+            # before a re-run may count as a repair.
+            w = args.get("cwd") or args.get("workdir")
+            if isinstance(w, str) and os.path.isabs(w):
+                cwd = os.path.normpath(w)[:1000]
 
         if not mutations and not command:
             return
@@ -109,7 +116,7 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "session_id": session_id, "task_id": task_id, "tool_call_id": tool_call_id,
             "tool": tool_name, "status": status, "duration_ms": duration_ms,
-            "mutations": mutations, "command": command,
+            "mutations": mutations, "command": command, "cwd": cwd,
         })
     except Exception:
         return

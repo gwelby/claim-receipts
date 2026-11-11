@@ -100,18 +100,33 @@ that exits 1 can back a hedge naming its file; "ink coverage 100%, margins 5%" i
 **The Day-3 check is internal consistency only.** A receipt edited so that its counts and its verdict
 list agree still passes; a receipt with no verdict list gets only the sum check.
 
+## Codex's recheck of 2358d20 (2026-11-11)
+
+Codex rechecked the return and credited the C1 scope, C4 acceptance-bar and C5 package repairs, the 15
+native observation comparisons and the four command-alias comparisons. It held on three groups; the
+first two had been disclosed here as open, and disclosure does not turn an active favourable verdict
+into an abstention. All three now abstain, with Codex's own probe (eight cases, three of them positives
+that must stay `backed`) adopted as `tests/test_codex_2358d20_residuals.py`; on 2358d20 it fails 5/8.
+
+| Codex case | Now |
+|---|---|
+| R1: the same command text, run from another folder against a different `check.py`, counted as the failing check re-run | The ledger keeps the folder a terminal call ran in when the host passes one. A re-run repairs only with the same folder; when either folder is unknown, only if no operand is a relative path |
+| R2: a listing, then `git checkout -- .` or `python3 build.py` restored or created the target without naming it | After a listing, any command that is neither known to only look (including read-only `git` subcommands) nor known to change only what it names (`touch`, `rm`, `mkdir`, `cp`, `mv`, …) stales it |
+| R3: a coverage figure printed by a producer that then failed, or whose failure `; true` hid, counted | A measurement counts only from a call that succeeded (by its own status, or the hook's record of that exact command), uncut, with no `;`, `\|\|` or `\|` able to mask the producer |
+
+**Narrowed by this round:** a genuine repair checked with a relative script (`python3 check.py
+/x/app.py`) and no recorded folder abstains, which is the usual case on a live Hermes session, since its
+terminal tool does not pass the folder to the hook; a listing followed by an arbitrary program
+(`python3 -m py_compile OTHER`, `make`, `pytest`) abstains.
+
 ## Still open, named
 
 - **Native case08 stays UNJUDGED** without subject injection, as the audit recorded.
-- **A script that creates the target without naming it** (`python build.py`) after a listing is not
-  seen; the listing still speaks for the path.
 - **Column `ls` output** with a name containing two spaces is not caught.
 - **A scope word anywhere in a sentence makes it abstain.** "Fixed app.py; all tests pass" abstains
   (`scope-unbindable`) even with a recorded write, because "all" is read as a claim over a set.
 - **An ALL-CAPS word in a hedge is taken as its subject.** "I could not verify the API key works" is
   scoped to `API` and cannot be backed; the same sentence without it can.
-- **"Identical re-run" is identical text.** The same command re-run from another folder, against a
-  different script with the same name, counts as the repair.
 - **The fixture hash is checked against a record in the same commit.** It catches accidental drift
   between the fixture and its record, not a deliberate change to both.
 - **Usefulness, measured by an independent pass on realistic synthetic sessions (2026-11-11):** about

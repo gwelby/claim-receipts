@@ -443,6 +443,39 @@ def _measurement_names(m: tuple, path: str | None) -> bool:
     return not any(os.path.splitext(p)[1].lower() == ext for p in in_cmd - {path})
 
 
+def _same_check(e: dict, standing: dict) -> bool:
+    """Is event <e> the failing check <standing> run again?
+
+    Codex 2358d20 R1: identical TEXT is not an identical check. `python3 check.py /x/report.md`
+    run from folder A and from folder B runs two different check.py files. When both calls
+    recorded their folder, the folders must match. When either folder is unknown (Hermes does not
+    pass one to the hook for its terminal tool), the command may not depend on one: every operand
+    after the verb must be an option or an absolute path. NARROWED: a genuine repair checked with a
+    relative script and no recorded folder now abstains (`repair-unbound`).
+    """
+    if _norm_cmd(e["cmd"]) != _norm_cmd(standing["cmd"]):
+        return False
+    a, b = e.get("cwd"), standing.get("cwd")
+    if a and b:
+        return os.path.normpath(a) == os.path.normpath(b)
+    segs = _segments(e["cmd"])
+    if segs is None:
+        return False
+    for sg in segs:
+        argv, _targets = _strip_redirects(sg.tokens)
+        for t in argv[1:]:
+            if t.startswith("-"):
+                continue
+            if not os.path.isabs(t) and _PATHLIKE.search(t):
+                return False         # a relative path: it means something else in another folder
+    return True
+
+
+# An operand that names a file relative to the working folder: it contains a slash, or ends in a
+# file extension (`check.py`, `notes.md`). A bare word (`good` in `grep -q good /x/a`) does not.
+_PATHLIKE = re.compile(r"/|\.[A-Za-z0-9]{1,6}$")
+
+
 def _norm_cmd(cmd: str) -> str:
     """Whitespace-normalized command text, for the identical-rerun repair test."""
     return " ".join((cmd or "").split())
@@ -595,7 +628,7 @@ def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
                         standing, unbound_success = e, None
                 elif standing is None:
                     pass                           # nothing standing to repair
-                elif _norm_cmd(e["cmd"]) == _norm_cmd(standing["cmd"]):
+                elif _same_check(e, standing):
                     standing, unbound_success = None, None
                 else:
                     unbound_success = e            # names the subject, repairs nothing proven

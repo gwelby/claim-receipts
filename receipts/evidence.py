@@ -493,6 +493,25 @@ def _grep_files(args: list[str], verb: str = "grep") -> list[str]:
     return files if explicit else files[1:]
 
 
+# Commands that change only the files they name as operands (and their redirect targets); their
+# touches are bounded by those operands, as before. Everything else that is not read-only is a
+# wildcard touch (Codex 2358d20 R2).
+_BOUNDED_MUTATORS = {"touch", "rm", "rmdir", "mkdir", "cp", "mv", "ln", "chmod", "chown", "truncate",
+                     "tee", "unlink"}
+
+# git subcommands that only read the repository and the work tree.
+_GIT_READONLY = {"status", "log", "diff", "show", "ls-files", "rev-parse", "blame", "grep",
+                 "describe", "shortlog", "ls-tree", "cat-file"}
+
+
+def _git_subcommand(args) -> str:
+    """git's subcommand, skipping global options (`-C DIR`, `-c k=v` take a value)."""
+    i, toks = 0, list(args)
+    while i < len(toks) and toks[i].startswith("-"):
+        i += 2 if toks[i] in ("-C", "-c") else 1
+    return toks[i] if i < len(toks) else ""
+
+
 def _touches_in(cmd: str) -> list[tuple[int, tuple]]:
     """(segment index, touch) for every segment that may have created/removed/renamed a file.
 
@@ -513,7 +532,16 @@ def _touches_in(cmd: str) -> list[tuple[int, tuple]]:
             continue
         verb = seg.tokens[0]
         args, targets = _strip_redirects(seg.tokens[1:])
-        readonly = verb in _READONLY_VERBS and not (verb == "find" and set(args) & _FIND_WRITES)
+        readonly = (verb in _READONLY_VERBS and not (verb == "find" and set(args) & _FIND_WRITES)) \
+            or (verb == "git" and _git_subcommand(args) in _GIT_READONLY)
+        if not readonly and verb not in _BOUNDED_MUTATORS:
+            # Codex 2358d20 R2: a command that is neither known to only look nor known to change
+            # only what it names may create, restore or remove files it never names (`git checkout
+            # -- .` restores the target; `python3 build.py` writes a file named only inside the
+            # script). Its operands cannot bound its effects, so it stales every earlier listing:
+            # a wildcard touch.
+            out.append((idx, (frozenset(), frozenset(), True)))
+            continue
         toks = list(targets) if readonly else list(args) + list(targets)
         if not toks:
             continue
@@ -1071,7 +1099,7 @@ class Evidence:
                                   "call_id": rec.get("tool_call_id") or None,
                                   "result_exit1": result_exit1})
         self.command_events.append({"cmd": cmd, "ok": ok})
-        self.events.append({"kind": "command", "cmd": cmd, "ok": ok})
+        self.events.append({"kind": "command", "cmd": cmd, "ok": ok, "cwd": rec.get("cwd") or None})
         self.commands.append(cmd)
         if not ok:
             self.failed_commands.append(cmd)
@@ -1117,7 +1145,22 @@ class Evidence:
             if (item.get("tool") or "").lower() in ("read_file", "write_file", "patch"):
                 continue          # file BODIES are not measurements — this read its own fixtures back
             cmd = item.get("command") or ""
+            # Codex 2358d20 R3: the measurement must come from a producer that completed. A call
+            # that failed (or whose outcome is unknown), output that was cut, or a command where a
+            # later `;`/`||`/`|` could mask the producer's failure (`measure IMG; true` ends 0)
+            # gives no measurement.
+            done = item.get("ok")
+            if done is None and cmd:
+                # The output carries no status of its own: use the hook's record of the same
+                # command, which saw how the producer ended. Every record of it must have succeeded.
+                seen = [ev["ok"] for ev in self.command_events if ev["cmd"] == cmd]
+                done = bool(seen) and all(seen)
+            if done is not True or item.get("truncated"):
+                continue
             if cmd:
+                _ss = _segments(cmd)
+                if _ss is None or not all(_status_bound(_ss, i) for i in range(len(_ss))):
+                    continue
                 # Fable 06ac15a finding 1: a measurement's producing command must be one this
                 # file can segment. A heredoc (`python3 - IMG <<'EOF' print('ink coverage
                 # 100%') EOF`), $(...), backticks or a lone `&` segment to None — the printed

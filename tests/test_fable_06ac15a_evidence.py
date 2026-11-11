@@ -227,7 +227,21 @@ s, t = listed_dir("f5_pos_script_module")
 other = s.scope.parent / "other.py"
 other.write_text("x = 1\n")
 s.sh(f"python3 -m py_compile {q(other)}")
-expect("POS ls (absent) -> python3 -m py_compile OTHER (no inline code) -> absence backs",
+# RETIRED by Codex 2358d20 R2 (was BACKED): a command not known to only look may create, restore or
+# remove files it never names (py_compile itself writes __pycache__), so the earlier listing no
+# longer speaks for the folder. Disclosed in KNOWN_LIMITS as a narrowing.
+expect("NARROWED ls (absent) -> python3 -m py_compile OTHER -> abstains (any non-read-only command stales a listing)",
+       s.verdict(f"{t} is missing."), ("UNVERIFIABLE", "search-scope"))
+
+# Codex 2358d20 R2: a later restore or script creates the target without naming it.
+s, t = listed_dir("r2_script_creates_target")
+(s.scope / "build.py").write_text("from pathlib import Path\nPath('report.md').write_text('built')\n")
+s.sh(f"cd {q(s.scope)} && python3 build.py")
+expect("NEG ls (absent) -> python3 build.py writes the target unnamed -> abstains",
+       s.verdict(f"{t} is missing."), ("UNVERIFIABLE", "search-scope"))
+s, t = listed_dir("r2_read_only_git_keeps_listing")
+s.sh(f"git -C {q(s.scope)} status --short || true")
+expect("POS ls (absent) -> a read-only git subcommand -> absence still backs",
        s.verdict(f"{t} is missing."), ("BACKED", "absence-established"))
 
 s, t = listed_dir("f5_pos_plain")
