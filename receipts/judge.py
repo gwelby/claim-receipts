@@ -22,7 +22,7 @@ from dataclasses import dataclass
 # _segments/_strip_redirects/_status_bound/_abs_operand are evidence.py's quote-aware segment
 # scanner, reused read-only so the judge and the evidence layer agree on what executed (Fable
 # round 3: the judge admitted heredoc output the evidence layer refuses to segment).
-from .evidence import Evidence, _abs_operand, _segments, _status_bound, _strip_redirects
+from .evidence import Evidence, _abs_operand, _segments, _status_bound, _strip_redirects, exit1_is_result
 
 # ----------------------------------------------------------------------------- claim shapes
 
@@ -346,19 +346,16 @@ def _names_target(text: str, path: str, inside: bool = False) -> bool:
 # Fable round 3, finding 2: for these verbs exit 1 is a RESULT ("no match", "files differ", "the
 # test is false", "the tree has changes"), not a failure to run. `grep -c TODO APP` exiting 1 after
 # a fix means no TODO is left; `diff -u APP.orig APP` exiting 1 means the fix changed something.
-# Defined ONCE here for the lifecycle; the hedge side (evidence.has_observation, lane B3) needs the
-# same set — the integrator unifies. `git diff` belongs only with --exit-code/--quiet/--no-index.
-EXIT_IS_RESULT_VERBS = frozenset(("grep", "egrep", "fgrep", "rg", "diff", "cmp", "test", "[", "[["))
-_GIT_DIFF_RESULT_FLAGS = frozenset(("--exit-code", "--quiet", "--no-index"))
+# The verb list lives ONCE, in evidence.EXIT1_RESULT_VERBS / evidence.exit1_is_result (which also
+# requires `git diff` to be git's subcommand, with --exit-code/--quiet/--no-index). The hedge side
+# uses the narrow one-segment evidence.exit1_is_result_cmd because it grants a favourable
+# observation; the lifecycle below asks per segment, more broadly, because it only ever abstains.
 
 
 def _is_result_exit_verb(argv: list[str]) -> bool:
     if not argv:
         return False
-    verb = os.path.basename(argv[0])
-    if verb in EXIT_IS_RESULT_VERBS:
-        return True
-    return verb == "git" and "diff" in argv[1:] and bool(_GIT_DIFF_RESULT_FLAGS & set(argv[1:]))
+    return exit1_is_result([os.path.basename(argv[0])] + list(argv[1:]))
 
 
 def _exit_may_be_result(cmd: str) -> bool:
