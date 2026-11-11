@@ -69,7 +69,103 @@ _READ_TOOLS = {"read_file"}
 # the harmful: an unlisted verb counts as a possible mutation of every name it mentions.
 _READONLY_VERBS = {"ls", "dir", "tree", "cat", "head", "tail", "wc", "stat", "grep", "rg", "cd",
                    "true", ":", "echo", "printf", "pwd", "test", "file", "du", "df", "date",
-                   "whoami", "which", "find"}
+                   "whoami", "which", "find",
+                   # Fable 06ac15a finding 13: `[ -f T ]` / `[[ -f T ]]` are `test`; they only
+                   # look. Without them a `[ -f T ] && ...` after a listing staled it for T.
+                   "[", "[["}
+
+# Fable 06ac15a finding 5: an interpreter running INLINE code (`python3 -c CODE`, `python3 -` or a
+# bare interpreter reading its program from stdin, `node -e`, `bash -c`, `sh -c`, `perl -e`,
+# `ruby -e`, `php -r`, `pwsh -Command`) can create, remove or rename any file, and the names it
+# touches live inside a code string this scanner does not read: `python3 -c "open('report.md','w')"`
+# names no path token. Such a segment is a WILDCARD touch — it stales every earlier listing — and
+# its printed output is whatever the code was told to print, never a measurement. A script file
+# (`python3 /opt/measure.py IMG`) is not inline code and keeps its ordinary treatment.
+_INTERPRETER = re.compile(r"^(python[\d.]*|pypy[\d.]*|perl[\d.]*|node|nodejs|ruby|php[\d.]*|"
+                          r"bash|sh|zsh|dash|ksh|mksh|fish|osascript|pwsh|powershell|lua[\d.]*|"
+                          r"Rscript)$", re.I)
+# Short-option letters that mean "the program text follows / comes inline" for some interpreter
+# (python/sh -c, perl/node/ruby -e/-E, node/perl -p, php -r). Over-matching a harmless flag only
+# makes a segment a wildcard touch, which can only make a listing abstain.
+_INLINE_SHORT = set("ceEpr")
+_INLINE_LONG = {"--eval", "--command", "--print", "-command", "-encodedcommand", "-c"}
+# Prefix programs that run their argv as a command (`nice -n 19 python3 -c ...`).
+_WRAPPERS = {"env", "nice", "ionice", "timeout", "nohup", "command", "exec", "time", "sudo",
+             "stdbuf", "xargs", "chrt", "taskset"}
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _inline_code(tokens: list[str]) -> bool:
+    """Is this segment an interpreter running inline (or stdin-fed) code? See _INTERPRETER."""
+    toks = [t for t in _strip_redirects(list(tokens))[0]]
+    while toks and _ASSIGNMENT.match(toks[0]):
+        toks = toks[1:]                      # FOO=1 python3 -c ...
+    if not toks:
+        return False
+    start = None
+    if _INTERPRETER.match(os.path.basename(toks[0])):
+        start = 0
+    elif os.path.basename(toks[0]) in _WRAPPERS:
+        start = next((i for i, t in enumerate(toks[1:], 1)
+                      if _INTERPRETER.match(os.path.basename(t))), None)
+    if start is None:
+        return False
+    for tok in toks[start + 1:]:
+        if tok == "-":
+            return True                      # `python3 -`: the program is stdin (a heredoc, a pipe)
+        if tok == "--":
+            continue
+        if tok.lower() in _INLINE_LONG or tok.lower().startswith(("--eval=", "--command=")):
+            return True
+        if tok.startswith("-") and not tok.startswith("--"):
+            if set(tok[1:]) & _INLINE_SHORT:
+                return True
+            continue
+        if tok.startswith("--"):
+            continue
+        return False                         # the first operand is a script file
+    return True                              # no operand at all: the program comes from stdin
+
+
+# Fable 06ac15a finding 2: verbs whose exit status 1 is a RESULT, not a failure — grep/rg found no
+# match, diff/cmp found a difference, test/[ evaluated false, `git diff --exit-code|--quiet` found a
+# change. Exit 2 (or more) is still trouble. Defined ONCE here; judge.py's lifecycle side (lane A3)
+# needs the same set and may import it (integrator: unify on this definition).
+EXIT1_RESULT_VERBS = frozenset({"grep", "egrep", "fgrep", "rg", "diff", "cmp", "test", "[", "[["})
+# Redirect targets that cannot themselves fail and so cannot be the source of an exit status 1.
+_SAFE_REDIRECT_TARGETS = {"/dev/null", "1", "2"}
+
+
+def exit1_is_result(tokens) -> bool:
+    """Does exit status 1 of THIS argv report a result (no match / differs / false)?"""
+    toks = list(tokens or ())
+    if not toks:
+        return False
+    verb = toks[0]
+    if verb in EXIT1_RESULT_VERBS:
+        return True
+    if verb == "git":
+        rest, i = toks[1:], 0
+        while i < len(rest) and rest[i].startswith("-"):
+            i += 2 if rest[i] in ("-C", "-c") else 1      # git -C DIR / -c k=v take a value
+        if i < len(rest) and rest[i] == "diff":
+            return any(t in ("--exit-code", "--quiet", "--no-index") for t in rest[i + 1:])
+    return False
+
+
+def exit1_is_result_cmd(cmd: str) -> bool:
+    """True only when a whole command's exit status 1 can be attributed to a result verb.
+
+    Deliberately narrow: exactly ONE executed segment (a `cd X && grep ...` exits 1 when cd fails,
+    and then grep never ran; `grep ... | head` reports head's status) whose redirects cannot fail.
+    An unsegmentable command never qualifies."""
+    segs = [sg for sg in (_segments(cmd) or []) if sg.tokens]
+    if len(segs) != 1 or _segments(cmd) is None:
+        return False
+    argv, targets = _strip_redirects(segs[0].tokens)
+    if any(t not in _SAFE_REDIRECT_TARGETS for t in targets):
+        return False
+    return exit1_is_result(argv)
 # find is read-only only without these actions.
 _FIND_WRITES = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
                 "-fls"}
@@ -339,9 +435,57 @@ def _observe_operands(cmd: str) -> list[tuple[str, list[str], bool]]:
     for idx, seg in enumerate(segs):
         if seg.tokens and seg.tokens[0] in _OBSERVE_VERBS:
             args = _strip_redirects(seg.tokens[1:])[0]
-            out.append((seg.tokens[0], [t for t in args if not t.startswith("-")],
-                        _status_bound(segs, idx)))
+            if seg.tokens[0] in ("grep", "rg"):
+                operands = _grep_files(args, seg.tokens[0])
+            else:
+                operands = [t for t in args if not t.startswith("-")]
+            out.append((seg.tokens[0], operands, _status_bound(segs, idx)))
     return out
+
+
+# grep/rg short options that consume the NEXT token as their value (when last in a cluster).
+_GREP_ARG_SHORT = {"grep": set("ABCmefdD"), "rg": set("ABCmefdgtTMjEr")}
+_GREP_ARG_LONG = {"--regexp", "--file", "--after-context", "--before-context", "--context",
+                  "--max-count", "--directories", "--devices", "--include", "--exclude",
+                  "--exclude-dir", "--label", "--glob", "--type", "--type-not", "--max-depth",
+                  "--threads", "--encoding", "--replace", "--max-columns"}
+_RG_ARG_LONG = {"--color", "--colour", "--colors", "--iglob", "--sort", "--sortr"}
+
+
+def _grep_files(args: list[str], verb: str = "grep") -> list[str]:
+    """The FILE operands of a grep/rg argv — never its pattern (Fable 06ac15a finding 12).
+
+    `grep -rn /x/report.md /src` searches /src FOR the text "/x/report.md"; it never read that
+    file, so a hedge about it was BACKED by a pattern. The first positional operand is the
+    pattern unless one was given with -e/-f (--regexp/--file). Option values (`-A 3`, `-m1`,
+    `--include GLOB`) are not operands either. A misparse can only drop an observation."""
+    files, explicit, ended, i = [], False, False, 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        if ended or tok == "-" or not tok.startswith("-"):
+            files.append(tok)
+            continue
+        if tok == "--":
+            ended = True
+            continue
+        if tok.startswith("--"):
+            name = tok.split("=", 1)[0]
+            if name in ("--regexp", "--file"):
+                explicit = True
+            if "=" not in tok and (name in _GREP_ARG_LONG
+                                   or (verb == "rg" and name in _RG_ARG_LONG)):
+                i += 1                       # the value is the next token
+            continue
+        cluster = tok[1:]
+        for j, ch in enumerate(cluster):
+            if ch in "ef":
+                explicit = True
+            if ch in _GREP_ARG_SHORT.get(verb, _GREP_ARG_SHORT["grep"]):
+                if j == len(cluster) - 1:
+                    i += 1                   # `-e PAT`, `-A 3`: the value is the next token
+                break                        # `-ePAT`, `-A3`: the rest of the cluster is the value
+    return files if explicit else files[1:]
 
 
 def _touches_in(cmd: str) -> list[tuple[int, tuple]]:
@@ -356,6 +500,11 @@ def _touches_in(cmd: str) -> list[tuple[int, tuple]]:
     out = []
     for idx, seg in enumerate(segs):
         if not seg.tokens:
+            continue
+        if _inline_code(seg.tokens):
+            # Fable 06ac15a finding 5: inline interpreter code may write any path, named only
+            # inside a code string — a wildcard touch, like an unsegmentable command.
+            out.append((idx, (frozenset(), frozenset(), True)))
             continue
         verb = seg.tokens[0]
         args, targets = _strip_redirects(seg.tokens[1:])
@@ -829,6 +978,14 @@ class Evidence:
         failed_calls = {o.get("call_id") for o in self.tool_outputs
                         if o.get("call_id") and o.get("ok") is False}
         for ob in self.observed:
+            if ob.get("result_exit1") and self._exit_code(ob.get("call_id")) == 1:
+                # Fable 06ac15a finding 2: `grep -n 'section 3' X` exiting 1 is the search that
+                # ran and found nothing — exactly the attempt a hedge reports. Only an exit code
+                # of exactly 1 captured for THIS call (exit 2 = unreadable file, no match ever
+                # attempted), and only for a single-segment result-verb command.
+                if any(same(t) for t in ob["operands"]):
+                    return True
+                continue
             if ob.get("call_id") and ob["call_id"] in failed_calls:
                 continue                    # the transcript says this call failed
             if ob["ok"] and any(same(t) for t in ob["operands"]):
@@ -847,6 +1004,16 @@ class Evidence:
             if same(o.get("path") or ""):
                 return True
         return False
+
+    def _exit_code(self, call_id) -> int | None:
+        """The exit code the transcript captured for exactly this call, else None."""
+        if not call_id:
+            return None
+        rows = [o for o in self.tool_outputs if o.get("call_id") == call_id]
+        if len(rows) != 1 or rows[0].get("error"):
+            return None
+        code = rows[0].get("exit_code")
+        return code if isinstance(code, int) and not isinstance(code, bool) else None
 
     @staticmethod
     def _read_ok(item: dict) -> bool:
@@ -888,11 +1055,16 @@ class Evidence:
             return
         for idx, touch in _touches_in(cmd):
             self._touches.append((ri, idx, touch))
+        result_exit1 = exit1_is_result_cmd(cmd)
         for verb, operands, bound in _observe_operands(cmd):
             # The record's status speaks for this segment only when no later `;`/`||`/`|` could
             # have masked its failure (hostile 364be5d finding 4: `cat MISSING; true`).
+            # result_exit1 (Fable 06ac15a finding 2): the command is ONE result-verb segment, so
+            # a captured exit status of exactly 1 means "searched, found nothing" — see
+            # has_observation. The record's own status cannot tell 1 from 2, so it stays ok=False.
             self.observed.append({"verb": verb, "operands": operands, "ok": ok and bound,
-                                  "call_id": rec.get("tool_call_id") or None})
+                                  "call_id": rec.get("tool_call_id") or None,
+                                  "result_exit1": result_exit1})
         self.command_events.append({"cmd": cmd, "ok": ok})
         self.events.append({"kind": "command", "cmd": cmd, "ok": ok})
         self.commands.append(cmd)
@@ -924,29 +1096,52 @@ class Evidence:
         it must name what was measured — and not like a progress render.
         """
         import re as _re
+        # Fable 06ac15a finding 4: margins, whitespace and bleed measure the page's COMPLEMENT
+        # (a `margins 5%` line is 95% coverage, or nothing), and dpi is a resolution, never an
+        # extent: none of them may make a percentage a coverage measurement. The words are gone
+        # from the admitting list, and a clause that names one of them is not a measurement.
         MEASURE_WORDS = _re.compile(
-            r"\b(coverage|ink|bbox|margins?|dpi|filled|whitespace|white space|area|"
-            r"page ?fill|occupied|bleed)\b", _re.I)
+            r"\b(coverage|ink|bbox|filled|area|page ?fill|occupied)\b", _re.I)
+        COMPLEMENT_WORDS = _re.compile(
+            r"\b(margins?|whitespace|white(?: space)?|blank|empty|bleed|padding|borders?|"
+            r"gutters?|unused|free|dpi|ppi)\b", _re.I)
         PROGRESS = _re.compile(r"(\d+%\||\|[#=]+\||it/s|Loading|\bETA\b|^\s*\d+%\s*$)", _re.I)
         PCT = _re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
         out = []
         for item in self.tool_outputs:
             if (item.get("tool") or "").lower() in ("read_file", "write_file", "patch"):
                 continue          # file BODIES are not measurements — this read its own fixtures back
+            cmd = item.get("command") or ""
+            if cmd:
+                # Fable 06ac15a finding 1: a measurement's producing command must be one this
+                # file can segment. A heredoc (`python3 - IMG <<'EOF' print('ink coverage
+                # 100%') EOF`), $(...), backticks or a lone `&` segment to None — the printed
+                # number is whatever an unread body was told to print. An inline-interpreter
+                # segment (`python3 -c`, `python3 -`, `node -e`, ...) is the same: its output is
+                # its own code's text, not a measurement.
+                segs = _segments(cmd)
+                if segs is None or any(_inline_code(sg.tokens) for sg in segs if sg.tokens):
+                    continue
             for line in (item.get("output") or "").splitlines():
                 if PROGRESS.search(line) or not MEASURE_WORDS.search(line):
                     continue
                 if any(ch in line for ch in '{}"') or "\"output\":" in line or "|" in line:
                     continue      # quoted/report text, not a measurement
-                for m in PCT.finditer(line):
-                    try:
-                        val = float(m.group(1)) / 100.0
-                    except ValueError:
+                # Each percentage binds to its own clause (finding 4): in "coverage 53.0%;
+                # margins top=0" the 53% is coverage, in "ink coverage 95%, margins 5%" the 5% is
+                # a margin. A clause must name a measure word and no complement word.
+                for clause in _re.split(r"[;,]", line):
+                    if not MEASURE_WORDS.search(clause) or COMPLEMENT_WORDS.search(clause):
                         continue
-                    if 0.0 <= val <= 1.0:
-                        # Carry the producing command too — the subject join happens
-                        # on command+line, not the bare number (R3c).
-                        out.append((val, line.strip()[:100], item.get("command") or ""))
+                    for m in PCT.finditer(clause):
+                        try:
+                            val = float(m.group(1)) / 100.0
+                        except ValueError:
+                            continue
+                        if 0.0 <= val <= 1.0:
+                            # Carry the producing command too — the subject join happens
+                            # on command+line, not the bare number (R3c).
+                            out.append((val, line.strip()[:100], cmd))
         return out
 
     @classmethod
