@@ -38,6 +38,10 @@ _LISTING_VERBS = ("ls", "dir", "find", "grep", "tree")
 _LS_OK_SHORT = set("1aAlCxRtrSUh")
 _LS_OK_LONG = {"--all", "--almost-all"}
 _LS_HIDDEN_SHORT = set("aA")
+# Output-format letters. GNU ls lets the LAST one win (`ls -lC` prints columns, `ls -1C` prints
+# columns, `ls -1x` prints rows); this file does not model "last wins", so two of them at once make
+# the format unknown and the listing incomplete (hostile 364be5d, finding 1).
+_LS_FORMAT_SHORT = set("l1Cx")
 
 # Segments that print nothing on success, so a listing in the same command keeps sole ownership of
 # the captured output. Any other co-segment may contribute lines, which would be merged into the
@@ -57,6 +61,20 @@ _OBSERVE_TOOL_WORDS = {"search", "find", "grep", "ls", "dir", "tree", "cat", "re
                        "lookup", "fetch", "curl", "scan", "inspect", "stat", "wc", "head", "tail"}
 # Native tools whose call arguments name the exact path they read (carried by the transcript join).
 _READ_TOOLS = {"read_file"}
+
+# Verbs that, WITHOUT a redirect, cannot create, delete or rename a file. Any other segment that
+# runs after a listing and names the listed target (or an ancestor, or a glob) may have changed it,
+# so that listing no longer speaks for the target's present state (hostile 364be5d, MINOR: `touch`,
+# `: > TARGET` or `rm` after the newest listing). This is a list of the harmless, not a model of
+# the harmful: an unlisted verb counts as a possible mutation of every name it mentions.
+_READONLY_VERBS = {"ls", "dir", "tree", "cat", "head", "tail", "wc", "stat", "grep", "rg", "cd",
+                   "true", ":", "echo", "printf", "pwd", "test", "file", "du", "df", "date",
+                   "whoami", "which", "find"}
+# find is read-only only without these actions.
+_FIND_WRITES = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
+                "-fls"}
+# A redirect token: optional fd or &, the operator, and (possibly) its glued target.
+_REDIRECT_TOK = re.compile(r"^(\d*|&)(>>|>\||>&|<>|<&|&>>|&>|>|<)(.*)$")
 
 
 def _ok(status) -> bool:
@@ -82,7 +100,9 @@ def _segments(cmd: str) -> list[_Segment] | None:
     Quote-aware (R4/C2): `printf '%s' 'note; ls /x'` is ONE printf segment; nothing inside the
     quotes executed. Returns None — no segment is trusted — for shapes this deliberately small
     scanner does not model: unbalanced quotes, subshells/grouping parentheses, backtick or $(...)
-    command substitution, process substitution. None means "abstain", never "guess".
+    command substitution, process substitution, heredocs/herestrings (`<<`: the body lines are
+    data, not commands — hostile 364be5d finding 4) and backgrounding with a lone `&` (the call
+    returns before the job's outcome or output exists). None means "abstain", never "guess".
     """
     if not isinstance(cmd, str):
         return None
@@ -127,6 +147,8 @@ def _segments(cmd: str) -> list[_Segment] | None:
             return None
         if c == "#" and (not buf or buf[-1][-1:] in (" ", "\t")):
             break                                  # comment: the rest never executes
+        if cmd.startswith("<<", i):
+            return None                            # heredoc/herestring: its body is not commands
         if c in "<>" or (c == "&" and cmd.startswith("&>", i)):
             redirect = True
             buf.append(c)
@@ -138,7 +160,9 @@ def _segments(cmd: str) -> list[_Segment] | None:
         two = cmd[i:i + 2]
         if two in ("&&", "||", "|&", ";;"):
             sep, i = two, i + 2
-        elif c in ";|&\n":
+        elif c == "&":
+            return None                            # backgrounded: outcome/output not this call's
+        elif c in ";|\n":
             sep, i = c, i + 1
         else:
             buf.append(c)
@@ -172,12 +196,49 @@ def _split_opts(args: list[str]) -> tuple[list[str], list[str]]:
     return opts, operands
 
 
+def _strip_redirects(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """(argv without redirections, redirect targets). `cat /dev/null > T` reads /dev/null; T is
+    a file it WRITES, never an operand it observed (hostile 364be5d finding 4). A quoted `>`
+    operand is dropped too — that loses an observation, it never invents one."""
+    kept, targets = [], []
+    skip = False
+    for tok in tokens:
+        if skip:
+            targets.append(tok)
+            skip = False
+            continue
+        m = _REDIRECT_TOK.match(tok)
+        if m:
+            if m.group(3):
+                targets.append(m.group(3))
+            else:
+                skip = True
+            continue
+        kept.append(tok)
+    return kept, targets
+
+
+def _status_bound(segs: list[_Segment], idx: int) -> bool:
+    """Does the CALL's exit status speak for segment <idx>?
+
+    Only when every separator after it is `&&` (a failure would have failed the call) and no `||`
+    precedes it (a `||` branch may never have run). `cat MISSING; true`, `cat MISSING || true`
+    and `ls X | head` all succeed whatever the observing segment did (hostile 364be5d finding 4)."""
+    if any(sg.sep_after == "||" for sg in segs[:idx]):
+        return False
+    return all(sg.sep_after in (None, "&&") for sg in segs[idx:])
+
+
 def _abs_operand(tok: str) -> str | None:
     """An operand whose literal value is a known absolute path, else None.
 
     Only an ABSOLUTE root can licence anything: a relative path is relative to a CWD we never
-    recorded. An operand needing expansion ($VAR, globs, ~) has no known value."""
+    recorded. An operand needing expansion ($VAR, globs, ~) has no known value. An operand with a
+    `..` component has no known PHYSICAL location: normpath collapses `/r/link/..` to `/r`, but
+    the kernel resolves it from the link's target (hostile 364be5d finding 2)."""
     if not tok or _EXPANSION.search(tok) or not os.path.isabs(tok):
+        return None
+    if ".." in tok.split("/"):
         return None
     return os.path.normpath(tok)
 
@@ -186,7 +247,7 @@ def _listing_of(seg: _Segment) -> list[dict]:
     """Listing descriptors for ONE executed segment (empty if it is not an admitted listing)."""
     if not seg.tokens or seg.tokens[0] not in _LISTING_VERBS:
         return []
-    verb, args = seg.tokens[0], seg.tokens[1:]
+    verb, args = seg.tokens[0], _strip_redirects(seg.tokens[1:])[0]
     # only a `|` pipe transforms this listing's output; `;`, `&&`, `||` do not. A redirect sends it
     # somewhere we never read, so the captured output is not the listing's.
     complete = seg.sep_after not in ("|", "|&") and not seg.redirect
@@ -197,6 +258,8 @@ def _listing_of(seg: _Segment) -> list[dict]:
         longs = {o for o in opts if o.startswith("--")}
         if not shorts <= _LS_OK_SHORT or not longs <= _LS_OK_LONG:
             complete = False
+        if len(shorts & _LS_FORMAT_SHORT) > 1:
+            complete = False                # last-wins format: the parser cannot know which
         hidden = bool(shorts & _LS_HIDDEN_SHORT) or bool(longs)
         max_depth = None if "R" in shorts else 1
         fmt = "ls-long" if "l" in shorts else ("ls-lines" if "1" in shorts else "ls-cols")
@@ -262,17 +325,75 @@ def _listings_in(cmd: str) -> list[dict]:
             d["segment"] = seg.text
             d["tokens"] = tuple(seg.tokens)
             d["seg_index"] = idx
+            d["status_bound"] = _status_bound(segs, idx)
             out.append(d)
     return out
 
 
-def _observe_operands(cmd: str) -> list[tuple[str, list[str]]]:
-    """(verb, operand tokens) for every executed segment whose verb is an exact observe verb."""
+def _observe_operands(cmd: str) -> list[tuple[str, list[str], bool]]:
+    """(verb, operand tokens, status_bound) for every executed segment whose verb is an exact
+    observe verb. Redirect targets are not operands; status_bound says whether the call's exit
+    status is this segment's (see _status_bound)."""
     out = []
-    for seg in _segments(cmd) or []:
+    segs = _segments(cmd) or []
+    for idx, seg in enumerate(segs):
         if seg.tokens and seg.tokens[0] in _OBSERVE_VERBS:
-            out.append((seg.tokens[0], [t for t in seg.tokens[1:] if not t.startswith("-")]))
+            args = _strip_redirects(seg.tokens[1:])[0]
+            out.append((seg.tokens[0], [t for t in args if not t.startswith("-")],
+                        _status_bound(segs, idx)))
     return out
+
+
+def _touches_in(cmd: str) -> list[tuple[int, tuple]]:
+    """(segment index, touch) for every segment that may have created/removed/renamed a file.
+
+    A touch is (names, abs_paths, wildcard): what the segment's argv and redirect targets name.
+    A command this scanner cannot segment is one wildcard touch at index 0 — it may have done
+    anything (a heredoc writing the target, a subshell, a substitution)."""
+    segs = _segments(cmd)
+    if segs is None:
+        return [(0, (frozenset(), frozenset(), True))]
+    out = []
+    for idx, seg in enumerate(segs):
+        if not seg.tokens:
+            continue
+        verb = seg.tokens[0]
+        args, targets = _strip_redirects(seg.tokens[1:])
+        readonly = verb in _READONLY_VERBS and not (verb == "find" and set(args) & _FIND_WRITES)
+        toks = list(targets) if readonly else list(args) + list(targets)
+        if not toks:
+            continue
+        names, paths, wild = set(), set(), False
+        for t in toks:
+            if t.startswith("-"):
+                if "=" not in t:
+                    continue
+                t = t.split("=", 1)[1]
+            if not t or re.fullmatch(r"\d+|-", t):
+                continue                     # fd duplication (2>&1), not a file
+            if _EXPANSION.search(t):
+                wild = True
+                continue
+            if os.path.isabs(t):
+                paths.add(os.path.normpath(t))
+            else:
+                names.update(part for part in t.split("/") if part not in ("", ".", ".."))
+        out.append((idx, (frozenset(names), frozenset(paths), wild)))
+    return out
+
+
+def _touch_hits(touch: tuple, root: str, target: str) -> bool:
+    """Could this touch have changed <target> (a path under <root>)?"""
+    names, paths, wild = touch
+    if wild:
+        return True
+    target = os.path.normpath(target)
+    for p in paths:
+        if target == p or target.startswith(p.rstrip(os.sep) + os.sep):
+            return True                      # the target itself, or a directory containing it
+    rel = os.path.relpath(target, os.path.normpath(root))
+    parts = {x for x in rel.split(os.sep) if x not in (".", "..")}
+    return bool(parts & names)               # a relative name: the cwd is unknown, so any match
 
 
 import fnmatch as _fnmatch
@@ -295,6 +416,10 @@ class Listing:
     bindable: bool = True           # single operand: output belongs to exactly one scope
     tokens: tuple = ()              # the segment's argv, for call-less (fixture) joins
     seg_index: int = 0
+    rec_index: int = 0              # which ledger record produced it (event order)
+    # Set only on the view searched_for() returns: segments that ran AFTER this listing and may
+    # have created/removed a name it covers. covers() is then "covered as of now", not "as of then".
+    later_touches: tuple = ()
 
     def covers(self, path: str) -> bool:
         """Was <path> inside the scope this listing looked at?
@@ -326,10 +451,32 @@ class Listing:
                 return False
             if depth > self.max_depth:
                 return False                # deeper than the enumeration reached
+        if any(_touch_hits(t, root, target) for t in self.later_touches):
+            return False                    # named by a later possible mutation: stale for it
         return True
 
 
 _LS_LONG_ROW = re.compile(r"^[-dlpscbx][-rwxsStT]{9}")
+_LS_MONTH = re.compile(r"^[^\d\s-]\S*$")
+_LS_DAY = re.compile(r"^\d{1,2}$")
+_LS_TIME_OR_YEAR = re.compile(r"^(\d{1,2}:\d{2}|\d{4})$")
+
+
+def _ls_long_name(row: str) -> str | None:
+    """The name on one `ls -l` row, or None when the row is not the shape this parser knows.
+
+    Admitted shape: exactly nine whitespace fields (mode, links, owner, group, size, month, day,
+    time-or-year, name), symlink rows judged on the part before ` -> `. A name with a space adds
+    a field — `old report.md` is not `report.md` (hostile 364be5d MINOR) — and device rows,
+    ISO dates or other locales change the count or the date shape: all abstain, never guess."""
+    left = row.split(" -> ", 1)[0] if row.startswith("l") else row
+    fields = left.split()
+    if len(fields) != 9 or not _LS_LONG_ROW.match(fields[0]):
+        return None
+    if not (_LS_MONTH.match(fields[5]) and _LS_DAY.match(fields[6])
+            and _LS_TIME_OR_YEAR.match(fields[7])):
+        return None
+    return fields[8]
 _ERROR_LINE = re.compile(r"^(ls|dir|find|tree|grep): |Permission denied|cannot open directory")
 
 
@@ -362,22 +509,29 @@ def _parse_entries(lst: Listing, output: str) -> frozenset | None:
             cur = os.path.normpath(st[:-1])
             continue
         if lst.fmt == "ls-long":
-            if st.startswith("total "):
+            if re.fullmatch(r"total \S+", st):
                 continue
-            if " -> " in st:                                   # ls -l symlink row
-                names = [st.split(" -> ", 1)[0].split()[-1]]
-            elif _LS_LONG_ROW.match(st):
-                names = [st.split()[-1]]
-            else:
-                continue
+            name = _ls_long_name(st)
+            if name is None:
+                return None                 # an unrecognised row is never skipped (finding 1)
+            names = [name]
         elif lst.fmt == "ls-lines":
             names = [st]                    # -1: one whole name per line
         else:
+            if re.search(r"\S \S", st):
+                return None                 # columns are 2+ spaces apart: a 1-space gap is a
+                                            # name with a space, which splitting would invent
             names = st.split()              # columns: every token is a name
         for n in names:
             n = n.rstrip("/")
-            if n:
-                out.add(os.path.normpath(n if os.path.isabs(n) else os.path.join(cur, n)))
+            if not n:
+                continue
+            if os.path.isabs(n):
+                # ls prints children by NAME. An absolute line is an operand printed as itself
+                # (a symlink under -l, a file, -d, or a multi-operand header) — the scope's
+                # contents were never enumerated (hostile 364be5d finding 2).
+                return None
+            out.add(os.path.normpath(os.path.join(cur, n)))
     return frozenset(out)
 
 
@@ -400,6 +554,9 @@ class Evidence:
     # Records that show the session LOOKED at something (search/read/inspect tools, listing
     # commands). A hedge needs one to mean anything — an unobserved "I could not verify"
     # asserts an attempt no evidence supports (R5).
+    # C2 + hostile 364be5d finding 5: these are observe-TOOL calls only (web_search, search_files,
+    # ...) — the only thing an UNSCOPED hedge may lean on. A terminal command, or a read_file of
+    # one named path, that looked at something unrelated is no attempt at an unnamed subject.
     observations: list[str] = field(default_factory=list)
     # Structured observe-verb segments: {verb, operands, ok, call_id}. Scoped hedges need the exact
     # subject among the operands of a successful one (C2) — the strings above are for display.
@@ -415,6 +572,9 @@ class Evidence:
         self._entries_cache: dict[int, frozenset | None] = {}
         self._view_base: dict[int, "Listing"] = {}
         self._views: list["Listing"] = []
+        self._rec_index = 0
+        # (rec_index, seg_index, touch) for every segment/record that may have changed a file
+        self._touches: list[tuple[int, int, tuple]] = []
 
     # ------------------------------------------------------------------ lookups
     def commands_for_error(self) -> list[str]:
@@ -484,17 +644,19 @@ class Evidence:
 
         Location identity (C2): the judge compares a claimed basename against entries_of(listing).
         A recursive listing's entries must therefore be the children of the claimed parent
-        directory — `find /r` printing /r/b/subject.md is not a sighting of /r/a/subject.md."""
+        directory — `find /r` printing /r/b/subject.md is not a sighting of /r/a/subject.md.
+        Always a fresh object: it carries the touches that ran after <base> (as-of-now coverage)."""
         directory = os.path.normpath(directory)
-        if directory == os.path.normpath(base.root):
-            return base
         rel = os.path.relpath(directory, os.path.normpath(base.root))
         depth = 0 if rel == os.curdir else len(rel.split(os.sep))
+        later = tuple(t for (ri, si, t) in self._touches
+                      if (ri, si) > (base.rec_index, base.seg_index))
         view = Listing(root=directory, command=base.command, ok=base.ok, complete=base.complete,
                        max_depth=None if base.max_depth is None else max(base.max_depth - depth, 0),
                        name_filter=base.name_filter, shows_hidden=base.shows_hidden,
                        call_id=base.call_id, seq=base.seq, fmt=base.fmt, bindable=base.bindable,
-                       tokens=base.tokens, seg_index=base.seg_index)
+                       tokens=base.tokens, seg_index=base.seg_index, rec_index=base.rec_index,
+                       later_touches=later)
         self._view_base[id(view)] = base
         self._views.append(view)          # keep it alive: ids must not be reused while cached
         return view
@@ -510,7 +672,39 @@ class Evidence:
             return None
         if self._bound_output(lst) == "truncated":
             return None
+        if self._through_symlink(lst.root, path):
+            return None
         return self._view(lst, path)
+
+    def _is_link(self, path: str) -> bool:
+        if self.fs is not None:
+            return bool((self.fs.get(os.path.normpath(path)) or {}).get("link"))
+        try:
+            return os.path.islink(path)
+        except (OSError, ValueError):
+            return True                     # cannot tell: treat as unsafe
+
+    def _through_symlink(self, root: str, path: str) -> bool:
+        """Is any component from <root> down to <path> (both included) a symbolic link?
+
+        `find LINK`, `ls -l LINK` and `ls -R` / `find` over a tree holding a linked directory do
+        not enumerate what lies behind the link, yet a path through it names real files (hostile
+        364be5d finding 2). Production checks the filesystem at receipt time; fixtures mark a
+        link with {"link": true}. Components above <root> are shared by listing and claim."""
+        root, path = os.path.normpath(root), os.path.normpath(path)
+        if self._is_link(root):
+            return True
+        rel = os.path.relpath(path, root)
+        if rel == os.curdir:
+            return False
+        cur = root
+        for part in rel.split(os.sep):
+            if part == "..":
+                return True
+            cur = os.path.join(cur, part)
+            if self._is_link(cur):
+                return True
+        return False
 
     def scope_report(self, path: str) -> str:
         """Why no listing can prove anything about <path> — for UNVERIFIABLE details."""
@@ -519,11 +713,14 @@ class Evidence:
         l = self._latest_covering(path)
         if l is not None:
             if not l.ok:
-                return f"listing of {l.root} failed ({l.command[:50]})"
+                return (f"listing of {l.root} failed, or its outcome was masked by another "
+                        f"segment ({l.command[:50]})")
             if not l.complete:
                 return f"listing of {l.root} was truncated/filtered ({l.command[:50]})"
             if self._bound_output(l) == "truncated":
                 return f"output of {l.command[:50]} was truncated before it was read"
+            if self._through_symlink(l.root, path):
+                return f"{path} is reached through a symbolic link that {l.command[:40]} did not follow"
         ran = ", ".join(sorted({l.root for l in self.listings})[:2])
         return f"searched {ran}, outside its scope, depth or visible names: {path}"
 
@@ -602,29 +799,47 @@ class Evidence:
             exact location;
           * a native read tool (read_file) whose call arguments name exactly the subject and whose
             captured result reports no error.
-        Unscoped (subject=None): any successful real observation — an observe-tool call, an
-        observe-verb command, a listing or a read. Echo/printf output, failed commands (`false`),
-        unrelated listings and unbound outputs are not attempts.
+        Unscoped (subject=None): a successful observe-TOOL call only (hostile 364be5d finding 5) —
+        `cat unrelated.txt`, `ls /` or a read_file of one named path is a real look at THAT thing,
+        not an attempt at an unnamed subject. Original case-06 (web_search, then the hedge) stays
+        BACKED. NARROWED: fdb8f87/364be5d also admitted any observe-verb command, any ok listing
+        and any native read here; those now back only a hedge that names their exact path.
+        Echo/printf output, failed commands (`false`), unrelated listings and unbound outputs are
+        not attempts.
+        A RELATIVE subject never matches (finding 3): `report.md` or `docs/report.md` is relative
+        to a working directory nobody recorded, so a same-spelled operand may be another file.
         """
         reads = [o for o in self.tool_outputs if self._read_ok(o)]
         if subject is None:
-            return bool(self.observations or [l for l in self.listings if l.ok] or reads)
+            # Parity: the live ledger records no row for a call that ran no command and changed
+            # nothing (web_search), so the live path reads the same observe-tool calls from the
+            # transcript; a row the host marked as an error is no attempt.
+            native = [o for o in self.tool_outputs
+                      if _tool_observes(o.get("tool") or "") and o.get("tool") not in _READ_TOOLS
+                      and not o.get("error") and o.get("ok") is not False]
+            return bool(self.observations or native)
         is_abs = os.path.isabs(subject)
         want = os.path.normpath(subject) if is_abs else subject
 
         def same(tok: str) -> bool:
             if is_abs:
                 return _abs_operand(tok) == want
-            return tok == want
+            return False                    # relative: identity unknowable (finding 3)
 
+        failed_calls = {o.get("call_id") for o in self.tool_outputs
+                        if o.get("call_id") and o.get("ok") is False}
         for ob in self.observed:
+            if ob.get("call_id") and ob["call_id"] in failed_calls:
+                continue                    # the transcript says this call failed
             if ob["ok"] and any(same(t) for t in ob["operands"]):
                 return True
         if is_abs:
+            parent = os.path.dirname(want)
             for l in self.listings:
                 if not l.ok:
                     continue
-                if l.covers(want) and self.entries_of(l) is not None:
+                if (l.complete and l.covers(want) and not self._through_symlink(l.root, parent)
+                        and self.entries_of(l) is not None):
                     return True
                 if want in (self._full_entries(l) or frozenset()):
                     return True   # a listing that printed the named file at its location saw it
@@ -646,10 +861,14 @@ class Evidence:
     # ------------------------------------------------------------------ builders
     def _ingest(self, rec: dict) -> None:
         """One ledger record -> evidence. Shared by the live and fixture builders (parity)."""
+        self._rec_index += 1
+        ri = self._rec_index
         for mut in rec.get("mutations") or []:
             p = mut.get("path")
             if not p:
                 continue
+            # Any recorded write (complete or not) after a listing makes it stale for that path.
+            self._touches.append((ri, -1, (frozenset(), frozenset({os.path.normpath(p)}), False)))
             # Incomplete == explicit exists: None (unobserved pre-state). Missing
             # before = legacy record, stays a normal mutation (R1).
             if mut.get("before") is not None and mut["before"].get("exists") is None:
@@ -663,15 +882,17 @@ class Evidence:
         ok = _ok(rec.get("status"))
         # R5: a failed observe call is a non-observation — it cannot back "I searched and could
         # not verify". C2: observation needs an exact observe verb leading an executed segment.
-        if ok and _tool_observes(tool):
+        if ok and _tool_observes(tool) and tool not in _READ_TOOLS:
             self.observations.append(tool.strip()[:120])
         if not cmd:
             return
-        for verb, operands in _observe_operands(cmd):
-            self.observed.append({"verb": verb, "operands": operands, "ok": ok,
+        for idx, touch in _touches_in(cmd):
+            self._touches.append((ri, idx, touch))
+        for verb, operands, bound in _observe_operands(cmd):
+            # The record's status speaks for this segment only when no later `;`/`||`/`|` could
+            # have masked its failure (hostile 364be5d finding 4: `cat MISSING; true`).
+            self.observed.append({"verb": verb, "operands": operands, "ok": ok and bound,
                                   "call_id": rec.get("tool_call_id") or None})
-            if ok:
-                self.observations.append(" ".join([verb] + operands)[:120])
         self.command_events.append({"cmd": cmd, "ok": ok})
         self.events.append({"kind": "command", "cmd": cmd, "ok": ok})
         self.commands.append(cmd)
@@ -679,11 +900,12 @@ class Evidence:
             self.failed_commands.append(cmd)
         for d in _listings_in(cmd):
             self.listings.append(Listing(
-                root=d["root"], command=d["segment"][:200], ok=ok, complete=d["complete"],
+                root=d["root"], command=d["segment"][:200], ok=ok and d["status_bound"],
+                complete=d["complete"],
                 max_depth=d["max_depth"], name_filter=d["name_filter"],
                 shows_hidden=d["shows_hidden"], call_id=rec.get("tool_call_id") or None,
                 seq=len(self.listings), fmt=d["fmt"], bindable=d["bindable"],
-                tokens=d["tokens"], seg_index=d["seg_index"]))
+                tokens=d["tokens"], seg_index=d["seg_index"], rec_index=ri))
 
     @classmethod
     def from_ledger(cls, records: Iterable[dict]) -> "Evidence":
