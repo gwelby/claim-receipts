@@ -57,7 +57,10 @@ for negative in (False,True):
         assert target.read_text()=='BROKEN\n'
         ck=subprocess.run(['/usr/bin/python3',str(a/'check'),str(target)],capture_output=True,text=True)
         assert ck.returncode==1
-    s.finish(f'I fixed `{target}`.', ['UNVERIFIABLE','CONTRADICTED'] if negative else ['BACKED'],
+    # RETIRED by Codex 6dc1938 N1 (explicitly, at Codex's ask): with no folder recorded, even an
+    # all-absolute re-run is not a repair; the positive now abstains. Its old BACKED expectation is
+    # NOT claimed to pass.
+    s.finish(f'I fixed `{target}`.', ['UNVERIFIABLE','CONTRADICTED'] if negative else ['UNVERIFIABLE'],
              'Both terminal calls omit cwd metadata. The negative uses the same extensionless relative script name in different actual folders; the positive uses one absolute script path.',target)
 
 # R2: git diff is only read-only without output-producing options.

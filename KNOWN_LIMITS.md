@@ -28,7 +28,7 @@ commit is the return for those six. It has **not** yet been rechecked by Codex. 
 
 | # | What the audit found | What this commit does | Control (in `tests/`, run by `make test`) |
 |---|---|---|---|
-| C1 | Counts covering the scope returned `backed` before the claim's property was judged: a 53% measurement with counts 2/2 was `backed`. | **Repaired.** Scope counts now only admit a claim; its kind is then judged. One failing member contradicts "all". **Narrowed:** a passing result from one judged subject cannot speak for the whole set, so it abstains (`scope-property-unbound`). The removed `scope-covered` verdict was used by no fixture or production path. | `test_judge_identity.py` |
+| C1 | Counts covering the scope returned `backed` before the claim's property was judged: a 53% measurement with counts 2/2 was `backed`. | **Repaired.** Scope counts now only admit a claim; its kind is then judged. One failing member contradicts "all" when counts are supplied, which only the test fixtures do; on a live session every claim with a scope word abstains (`scope-unbindable`). **Narrowed:** a passing result from one judged subject cannot speak for the whole set, so it abstains (`scope-property-unbound`). The removed `scope-covered` verdict was used by no fixture or production path. | `test_judge_identity.py` |
 | C2 | Native observation overstated what ran and what it covered: default `ls` omits dotfiles, a quoted `; ls` inside `printf` counted as a listing, a reader-truncated listing proved absence, `find` lost locations, repeated listings were merged, unrelated or failed commands backed a hedge, and an exact-path `read_file` lost its subject. | **Repaired**, all 15 of the audit's comparisons within bounds (6 of 15 before). Commands split only on unquoted separators; anything with `$( )`, backticks or unbalanced quotes is not a listing. A listing counts only in a small allowed form (one absolute path, a fixed set of `ls` flags, or `find ROOT [-maxdepth N] [-name P] [-print]`). Dotfiles need `-a`/`-A`. Cut output cannot prove absence. Entries keep full paths; the newest covering listing decides. A hedge needs a successful observation naming the exact subject path. **Narrowed:** `grep -r` omissions and `tree` output no longer prove absence; other `ls` flags, several paths, redirects or extra `find` options make a listing unable to prove absence. | `test_native_observation.py`, `test_transcript.py` |
 | C3 | A successful command that only named the target (`check report.md.bak`, another folder's `report.md`, `printf` of the path) erased a recorded failure. | **Repaired.** A successful command repairs a recorded failure only if it is the identical failing command run again. **Narrowed:** a real repair checked with a *different* command (fails with `pytest`, passes with `python3`) now abstains (`repair-unbound`) instead of being backed. The exact-path write repair is unchanged. | `test_judge_identity.py` |
 | C4 | The acceptance exit enforced the original quota but not the added regressions: two mutants scored 34/35 and exited 0. | **Repaired.** The original-eight rule (7/8 and both positives) is kept, and all 27 added regression cases are each required. "Honest work" counts every case expected `backed`, not names containing a word. The fixture is checked against its recorded hash (that record had been stale since `013dae4`). All three of the audit's mutants now exit 1. | `test_bar_mutants.py` |
@@ -136,6 +136,33 @@ are adopted as `tests/test_codex_6a6aae3_neighbours.py`; on 6a6aae3 it fails 3/6
 /x/app.py`) no longer repairs without a recorded folder; `git log`, `git diff` and the rest stale a
 listing.
 
+## Codex's targeted recheck of 6dc1938, and the definitions pass (2026-11-11)
+
+Codex closed N2, N3 and all fourteen earlier cases, and held on one rule: re-run identity (N1), with three
+witnesses. Its minimum, a known matching folder and the complete literal command, is now the rule exactly.
+Its three probes are adopted as `tests/test_codex_6dc1938_{literal_identity,cut_identity,option_boundary}.py`;
+each fails its negative on 6dc1938.
+
+| Codex witness | Now |
+|---|---|
+| M1: `python3 -mcheck /x/T`, identical text, folder unknown, loads a different module | A re-run repairs only when both calls recorded the same folder. **RETIRED explicitly:** every re-run repair with a folder unknown, including all-absolute ones, abstains; the adopted positive `r1_missing_cwd_absolute_script_positive` now expects abstention, and Codex's `exact_command_repair_positive` abstains too |
+| M2: whitespace collapsed inside a quoted argument | Commands are compared literally, character for character |
+| M3: two commands longer than the ledger's 2,000-character cap, equal before the cut | The ledger flags a command it cut; a cut (or possibly cut) command never repairs |
+
+Writing the term definitions against the code found three more favourable verdicts the evidence did not
+support. All now fail closed:
+
+| Found | Now |
+|---|---|
+| A hedge naming a relative path with a folder (`docs/report.md`) counted as naming no file, so any `web_search` backed it | It is scoped to that relative path, which never matches: it cannot be backed |
+| A bare name matched longer names: "app.py exists" was backed by a write to `app.py-backup` | Exact file name only |
+| "Exists" and "current" used a listing without checking it was still current; "missing" was contradicted from a listing whose output was never captured | Both need a listing that still covers the file; "missing" is contradicted only by what the listing was seen to print |
+
+**Disclosed, not changed:** completion words ("fixed", "verified", "passed") are backed by a recorded
+write to the named file; the plugin does not check that any test passed. A write to the exact file also clears
+a recorded failure on it. A tool call that reports no status counts as succeeded. With a folder never recorded
+(the live case), a failed check is cleared only by such a write.
+
 ## Still open, named
 
 - **Native case08 stays UNJUDGED** without subject injection, as the audit recorded.
@@ -146,10 +173,11 @@ listing.
   scoped to `API` and cannot be backed; the same sentence without it can.
 - **The fixture hash is checked against a record in the same commit.** It catches accidental drift
   between the fixture and its record, not a deliberate change to both.
-- **Usefulness, measured by an independent pass on realistic synthetic sessions (2026-11-11):** about
-  56% of genuine claims were backed (write-and-test 10/17, list-and-"missing" 10/19, read-and-hedge
-  9/16); most of the rest abstain on shapes the plugin does not read (`2>/dev/null`, `| head`,
-  `cd X && ls`, `find -type f`, `sed -n`). Abstaining is the intended failure; a false verdict is not.
+- **Usefulness.** On the released commit, 50 realistic synthetic cases where the claim was true (built by an
+  independent pass: write-and-test, list-and-"missing", read-and-hedge): 32 (64%) backed, the rest abstained, none
+  contradicted. Most abstentions are shapes the plugin does not read (`2>/dev/null`, `| head`, `cd X && ls`,
+  `find -type f`, `sed -n`). Abstaining is the intended failure; a false verdict is not. These are exposed cases,
+  not an accuracy estimate. (The same pass measured about 56% on an earlier commit.)
 - **The text-producer list is a denylist.** An unlisted program whose only job is to print
   "coverage 100%" would still be read as a measurement.
 - **Day-3 counts are bound to a receipt, not to a plugin commit.** A receipt does not record which

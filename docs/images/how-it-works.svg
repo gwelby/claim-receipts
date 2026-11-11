@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1096" role="img" aria-labelledby="t d" fill="#1f2328">
+  <title id="t">How claim-receipts works</title>
+  <desc id="d">During the session, hooks stat each file a write tool touches before and after the call and record only real changes, plus each terminal command and how it ended, in an append-only ledger. At session end the read-only transcript and the ledger become evidence, each recognised claim in the agent's prose is judged, and a receipt is written.</desc>
+  <style>
+    .s{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif}
+    .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;font-size:14px}
+    .h{font-size:17px;font-weight:700}
+    .b{font-size:15px}
+    .n{font-size:14px;fill:#57606a}
+    .k{font-size:14px;font-weight:700;letter-spacing:1px}
+    .ar{stroke:#57606a;stroke-width:2;fill:none}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+
+  <!-- card: a solid light background keeps every label readable on GitHub dark mode -->
+  <rect x="2" y="2" width="996" height="1092" rx="18" fill="#ffffff" stroke="#d0d7de" stroke-width="2"/>
+
+  <text class="s" x="40" y="58" font-size="26" font-weight="700">How claim-receipts works</text>
+  <text class="s n" x="40" y="88" font-size="16">Hooks record what the tools did. At session end, recognised claims are checked against that record.</text>
+
+  <!-- ===== during the session ===== -->
+  <text class="s k" x="40" y="142" fill="#0969da">DURING THE SESSION · ON EVERY TOOL CALL</text>
+
+  <!-- A: the tool call -->
+  <rect x="40" y="160" width="190" height="210" rx="10" fill="#f6f8fa" stroke="#8c959f" stroke-width="1.5"/>
+  <text class="s h" x="56" y="192">Agent tool call</text>
+  <text class="s n" x="56" y="216">for example</text>
+  <text class="m" x="56" y="244" fill="#1f2328">write_file</text>
+  <text class="m" x="56" y="265" fill="#1f2328">patch</text>
+  <text class="m" x="56" y="286" fill="#1f2328">edit_file</text>
+  <text class="m" x="56" y="307" fill="#1f2328">create_file</text>
+  <text class="m" x="56" y="328" fill="#1f2328">append_file</text>
+  <text class="m" x="56" y="349" fill="#1f2328">terminal, …</text>
+
+  <path class="ar" d="M230 265 H276" marker-end="url(#a)"/>
+
+  <!-- B: pre hook -->
+  <rect x="280" y="160" width="290" height="210" rx="10" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+  <text class="s h" x="296" y="192">1 · Before the tool runs</text>
+  <text class="m" x="296" y="216" fill="#0969da">pre_tool_call · ledger.py</text>
+  <text class="s b" x="296" y="248">stat() each path a write tool</text>
+  <text class="s b" x="296" y="269">is about to touch: does it</text>
+  <text class="s b" x="296" y="290">exist, its size, its mtime.</text>
+  <text class="s n" x="296" y="328">Which tools count as writes</text>
+  <text class="s n" x="296" y="349">is fixed in paths.py.</text>
+
+  <path class="ar" d="M570 265 H616" marker-end="url(#a)"/>
+
+  <!-- C: post hook -->
+  <rect x="620" y="160" width="340" height="210" rx="10" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+  <text class="s h" x="636" y="192">2 · After it runs</text>
+  <text class="m" x="636" y="216" fill="#0969da">post_tool_call · ledger.py</text>
+  <text class="s b" x="636" y="248">stat() again. Record only a real</text>
+  <text class="s b" x="636" y="269">change: create, modify or delete.</text>
+  <text class="s b" x="636" y="290">No before-state? Kept, not certified.</text>
+  <text class="s b" x="636" y="319">Terminal: record the command and</text>
+  <text class="s b" x="636" y="340">how it ended (ok / error), never</text>
+  <text class="s b" x="636" y="361">as a file change.</text>
+
+  <path class="ar" d="M790 370 H790 V406" marker-end="url(#a)"/>
+
+  <!-- the rule -->
+  <rect x="40" y="410" width="440" height="100" rx="10" fill="#ffffff" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text class="s h" x="58" y="442">The rule</text>
+  <text class="s b" x="58" y="469">A path named in a tool result is not evidence.</text>
+  <text class="s b" x="58" y="492">A path whose stat() differs across the call is.</text>
+
+  <!-- ledger -->
+  <rect x="520" y="410" width="440" height="100" rx="10" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+  <text class="s h" x="538" y="442">Append-only ledger</text>
+  <text class="m" x="942" y="442" text-anchor="end" fill="#7d4e00">ledger.py</text>
+  <text class="s b" x="538" y="469">One JSONL file per session, only appended to</text>
+  <text class="m" x="538" y="494" fill="#1f2328">~/.hermes/plugin-data/receipts/sessions/</text>
+
+  <!-- ===== at session end ===== -->
+  <line x1="40" y1="546" x2="960" y2="546" stroke="#d0d7de" stroke-width="1.5" stroke-dasharray="4 6"/>
+  <text class="s k" x="40" y="578" fill="#8250df">AT SESSION END · on_session_end (__init__.py)</text>
+
+  <path class="ar" d="M740 510 V594" marker-end="url(#a)"/>
+
+  <!-- transcript -->
+  <rect x="40" y="598" width="400" height="160" rx="10" fill="#fbefff" stroke="#8250df" stroke-width="1.5"/>
+  <text class="s h" x="58" y="630">Session transcript (read-only)</text>
+  <text class="m" x="58" y="654" fill="#8250df">transcript.py</text>
+  <text class="s b" x="58" y="684">Hermes's own ~/.hermes/state.db,</text>
+  <text class="s b" x="58" y="705">opened read-only. Newest 600 messages;</text>
+  <text class="s b" x="58" y="726">a tool output over 20,000 characters</text>
+  <text class="s b" x="58" y="747">is cut and marked as cut.</text>
+
+  <path class="ar" d="M440 678 H516" marker-end="url(#a)"/>
+  <text class="s n" x="478" y="668" text-anchor="middle">output</text>
+
+  <!-- evidence -->
+  <rect x="520" y="598" width="440" height="160" rx="10" fill="#fbefff" stroke="#8250df" stroke-width="1.5"/>
+  <text class="s h" x="538" y="630">Evidence</text>
+  <text class="m" x="538" y="654" fill="#8250df">evidence.py</text>
+  <text class="s b" x="538" y="684">• file changes (stat differed)</text>
+  <text class="s b" x="538" y="705">• commands run, and how each ended</text>
+  <text class="s b" x="538" y="726">• listings: the only proof of absence</text>
+  <text class="s b" x="538" y="747">• observations (searches, exact reads)</text>
+
+  <!-- to the judge -->
+  <path class="ar" d="M240 758 V810" marker-end="url(#a)"/>
+  <text class="s n" x="252" y="800">the agent's own words</text>
+  <path class="ar" d="M740 758 V778 H420 V810" marker-end="url(#a)"/>
+  <text class="s n" x="580" y="800">evidence</text>
+
+  <!-- judge -->
+  <rect x="40" y="814" width="400" height="190" rx="10" fill="#ffffff" stroke="#8250df" stroke-width="1.5"/>
+  <text class="s h" x="58" y="846">Judge each recognised claim</text>
+  <text class="m" x="58" y="870" fill="#8250df">judge.py</text>
+  <text class="s b" x="58" y="900">Claims are found by fixed patterns:</text>
+  <text class="s b" x="58" y="921">done, fixed, exists, missing, current,</text>
+  <text class="s b" x="58" y="942">full-page, could not verify, …</text>
+  <text class="s b" x="58" y="968">A claim it cannot locate is counted,</text>
+  <text class="s b" x="58" y="989">not judged.</text>
+
+  <path class="ar" d="M440 904 H516" marker-end="url(#a)"/>
+  <text class="s n" x="478" y="894" text-anchor="middle">verdicts</text>
+
+  <!-- receipt -->
+  <rect x="520" y="814" width="440" height="190" rx="10" fill="#f6f8fa" stroke="#57606a" stroke-width="1.5"/>
+  <text class="s h" x="538" y="846">Receipt</text>
+  <text class="m" x="942" y="846" text-anchor="end" fill="#57606a">receipt.py</text>
+  <text class="m" x="538" y="874" fill="#1f2328">receipts/&lt;session&gt;.md and .json</text>
+  <text class="s b" x="538" y="902">What the record shows, every verdict with</text>
+  <text class="s b" x="538" y="923">its reason, and what it does NOT tell you.</text>
+  <!-- verdict chips -->
+  <rect x="538" y="952" width="66" height="30" rx="15" fill="#dafbe1" stroke="#1a7f37"/>
+  <text class="s" x="571" y="972" font-size="14" text-anchor="middle" fill="#116329">backed</text>
+  <rect x="612" y="952" width="84" height="30" rx="15" fill="#fff8c5" stroke="#9a6700"/>
+  <text class="s" x="654" y="972" font-size="14" text-anchor="middle" fill="#7d4e00">unbacked</text>
+  <rect x="704" y="952" width="106" height="30" rx="15" fill="#ddf4ff" stroke="#0969da"/>
+  <text class="s" x="757" y="972" font-size="14" text-anchor="middle" fill="#0550ae">unverifiable</text>
+  <rect x="818" y="952" width="112" height="30" rx="15" fill="#ffebe9" stroke="#cf222e"/>
+  <text class="s" x="874" y="972" font-size="14" text-anchor="middle" fill="#a40e26">contradicted</text>
+
+  <!-- footer -->
+  <text class="s n" x="40" y="1046">Every hook swallows its own errors (fail-open), so a capture failure looks like a quiet session.</text>
+  <text class="s n" x="40" y="1070">Mid-session, /claim-receipts lists the evidence so far (claims.py); verdicts come only at session end.</text>
+</svg>

@@ -1,5 +1,8 @@
 # claim-receipts
 
+**New here? Start with [docs/UNDERSTAND.md](docs/UNDERSTAND.md)**: the same idea told four ways, from age 5 to
+master, with pictures. Every term is defined in [docs/definitions/](docs/definitions/README.md).
+
 Evidence for agent sessions, checked against the filesystem.
 
 **A prompt can tell an agent to claim less. A skill can describe how to check. Neither can do this.**
@@ -19,9 +22,9 @@ agent: agreement with a capture is not truth.
 
 | verdict | meaning |
 |---|---|
-| **backed** | an observed file change or command supports the claim |
+| **backed** | the record supports the claim: a recorded write to the file, or a successful observation, listing or measurement of it |
 | **unbacked** | the session claimed work that left no trace in the capture |
-| **unverifiable** | the claim cannot be checked against a filesystem at all (an opinion, a judgement, a plan) |
+| **unverifiable** | the record cannot decide this claim, so the plugin abstains on purpose |
 | **contradicted** | the capture directly conflicts with the claim — e.g. the file exists and the session says it is missing |
 
 `unverifiable` is first-class. Forcing it into "backed" would make the record lie in the flattering
@@ -56,13 +59,15 @@ abstains (`unverifiable`) rather than guess in the flattering direction.
   one absolute path, in an allowed form. Anything else (other flags, several paths, quoting it cannot
   read, a cut result) abstains.
 - **Hedging alone earns nothing**, nor does a command that merely names a similar file.
-- **A repair must be the same check run again.** A failure counts only when it names the exact path;
-  only an identical re-run repairs it. A *different* successful command, or a failure on a look-alike
-  path, abstains.
+- **A repair must be the same check run again, in the same place.** A failure counts only when it names
+  the exact path. It is repaired by a recorded write to that exact file, or by the complete, identical
+  command run again in the same recorded folder. Hermes does not pass the folder to the hook, so on a live
+  session only the write clears it. A *different* successful command, or a failure on a look-alike path,
+  abstains.
 - **How a claim finds its file.** An absolute path is used as written. A bare file name (`app.py`) is
-  matched to a file the session changed or saw with that name, preferring one it changed. A relative path
-  with a folder (`docs/app.py`), a relative hedge subject, and relative paths inside commands are not
-  matched: they abstain.
+  matched only to a file of exactly that name that the session wrote (with its before-state captured). A
+  relative path with a folder (`docs/app.py`) and relative paths inside commands are not matched; such a
+  claim is left unjudged, and a hedge about such a path cannot be backed (`unbacked`).
 - **A hedge needs its observation.** A hedge about a named file needs a successful read or listing of
   that exact path. A hedge that names no file is backed only by an observe tool such as `web_search`,
   never by an arbitrary command.
@@ -101,7 +106,8 @@ hermes plugins install gwelby/claim-receipts --ref <the 40-character commit in t
 hermes plugins enable claim-receipts       # hot-loads hooks; no restart needed
 ```
 
-Then `/claim-receipts` in a session shows what it has proven so far. Disable any time with
+Then `/claim-receipts` in a session lists the evidence recorded so far (verdicts are written to the receipt at
+session end; with no argument it shows the most recently written ledger, which may be another session's). Disable any time with
 `hermes plugins disable claim-receipts`. (The catalog key and the plugin are both `claim-receipts`:
 another plugin already uses the name `receipts`.)
 
@@ -111,10 +117,12 @@ Everything stays on your machine. No network calls, no telemetry, no credentials
 
 **It reads Hermes's own session database**, `~/.hermes/state.db`, at session end, to bind each
 command's output to the command that produced it. It opens the file read-only (SQLite `mode=ro`),
-reads only the current session's newest messages (at most 600, and at most 20,000 characters of each
-tool result), and never writes to it. `RECEIPTS_TRANSCRIPT_DB` points it at another file. That is a
+reads only the current session's newest messages (at most 600 rows in each of its three queries; each
+tool result capped at 20,000 characters; the agent's own prose is read without a per-message cap), and
+never writes to it. `RECEIPTS_TRANSCRIPT_DB` points it at another file. That is a
 read outside the plugin's own data, so it is stated here.
 
+The receipt stores **the sentences of the agent's own prose that it judged** (up to 300 characters each).
 The ledger records local file paths, sizes and mtimes — **which means it records the names of the files
 you work on** — and it records **the command strings of terminal calls**, which can themselves contain
 paths, arguments and anything you typed on a command line. That is a wider disclosure than "file names".

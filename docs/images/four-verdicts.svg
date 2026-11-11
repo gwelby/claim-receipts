@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 720" role="img" aria-labelledby="t d" fill="#1f2328">
+  <title id="t">The four verdicts</title>
+  <desc id="d">Each recognised claim gets one of four verdicts. Backed: an observed change or command supports it. Unbacked: claimed work left no trace. Unverifiable: the record cannot decide, so the plugin abstains; this is honest abstention, not a failure. Contradicted: the record says otherwise.</desc>
+  <style>
+    .s{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif}
+    .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;font-size:14px}
+    .v{font-size:24px;font-weight:700}
+    .b{font-size:16px}
+    .n{font-size:14px;fill:#57606a}
+  </style>
+
+  <!-- card: a solid light background keeps every label readable on GitHub dark mode -->
+  <rect x="2" y="2" width="996" height="716" rx="18" fill="#ffffff" stroke="#d0d7de" stroke-width="2"/>
+
+  <text class="s" x="40" y="58" font-size="26" font-weight="700">Four verdicts per claim</text>
+  <text class="s n" x="40" y="88" font-size="16">Each recognised claim gets exactly one, with a reason code that says why.</text>
+
+  <!-- ===== backed ===== -->
+  <rect x="40" y="116" width="450" height="236" rx="12" fill="#dafbe1" stroke="#1a7f37" stroke-width="2"/>
+  <circle cx="84" cy="160" r="22" fill="#1a7f37"/>
+  <path d="M73 160 L81 168 L96 152" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text class="s v" x="120" y="169" fill="#116329">backed</text>
+  <text class="s b" x="62" y="214">An observed file change or command</text>
+  <text class="s b" x="62" y="236">supports the claim.</text>
+  <text class="s n" x="62" y="272">Example</text>
+  <text class="m" x="62" y="294">"Created /x/report.md."</text>
+  <text class="s n" x="62" y="316">The ledger holds a write to that exact path.</text>
+  <text class="m" x="62" y="338" fill="#116329">written-this-session</text>
+
+  <!-- ===== unbacked ===== -->
+  <rect x="510" y="116" width="450" height="236" rx="12" fill="#fff8c5" stroke="#9a6700" stroke-width="2"/>
+  <circle cx="554" cy="160" r="20" fill="#ffffff" stroke="#9a6700" stroke-width="3" stroke-dasharray="5 4"/>
+  <text class="s v" x="590" y="169" fill="#7d4e00">unbacked</text>
+  <text class="s b" x="532" y="214">The session claimed work that left</text>
+  <text class="s b" x="532" y="236">no trace in the record.</text>
+  <text class="s n" x="532" y="272">Example</text>
+  <text class="m" x="532" y="294">"Wrote /x/notes.md."</text>
+  <text class="s n" x="532" y="316">No write was recorded, and nothing is there.</text>
+  <text class="m" x="532" y="338" fill="#7d4e00">artifact-missing</text>
+
+  <!-- ===== unverifiable ===== -->
+  <rect x="40" y="372" width="450" height="236" rx="12" fill="#ddf4ff" stroke="#0969da" stroke-width="2"/>
+  <circle cx="84" cy="416" r="22" fill="#0969da"/>
+  <text class="s" x="84" y="425" font-size="26" font-weight="700" text-anchor="middle" fill="#ffffff">?</text>
+  <text class="s v" x="120" y="425" fill="#0550ae">unverifiable</text>
+  <rect x="290" y="400" width="182" height="30" rx="15" fill="#ffffff" stroke="#0969da"/>
+  <text class="s" x="381" y="420" font-size="14" font-weight="700" text-anchor="middle" fill="#0550ae">honest abstention</text>
+  <text class="s b" x="62" y="470">The record cannot decide, so the plugin</text>
+  <text class="s b" x="62" y="492">abstains on purpose. Not a failure.</text>
+  <text class="s n" x="62" y="528">Example</text>
+  <text class="m" x="62" y="550">"/x/old.md is missing."</text>
+  <text class="s n" x="62" y="572">The only listing was cut short: ls /x | head</text>
+  <text class="m" x="62" y="594" fill="#0550ae">search-scope</text>
+
+  <!-- ===== contradicted ===== -->
+  <rect x="510" y="372" width="450" height="236" rx="12" fill="#ffebe9" stroke="#cf222e" stroke-width="2"/>
+  <circle cx="554" cy="416" r="22" fill="#cf222e"/>
+  <path d="M545 407 L563 425 M563 407 L545 425" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <text class="s v" x="590" y="425" fill="#a40e26">contradicted</text>
+  <text class="s b" x="532" y="470">The record says otherwise.</text>
+  <text class="s n" x="532" y="528">Example</text>
+  <text class="m" x="532" y="550">"/x/out.md does not exist."</text>
+  <text class="s n" x="532" y="572">The session wrote /x/out.md itself.</text>
+  <text class="m" x="532" y="594" fill="#a40e26">artifact-present</text>
+
+  <!-- footer -->
+  <text class="s b" x="40" y="646"><tspan font-weight="700">unverifiable</tspan> is the honest answer when the record cannot decide. Forcing it to</text>
+  <text class="s b" x="40" y="668">backed would make the receipt lie in the flattering direction, the failure it exists to catch.</text>
+  <text class="s n" x="40" y="698">Not every sentence is judged: a claim the patterns miss, or whose file cannot be located, is counted as unjudged.</text>
+</svg>

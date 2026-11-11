@@ -167,8 +167,12 @@ print("\nC3 — command identity (registered hooks, synthetic files)")
 
 s, t = command_case("exact_rerun_positive", lambda s, t: f"check {t}")
 got = s.finish(f"I fixed `{t}`.")
-check("C3 paired positive: identical check re-run repairs -> BACKED",
-      got == ("BACKED", "written-this-session"), "/".join(got))
+# RETIRED by Codex 6dc1938 N1 (explicitly): these synthetic calls record no folder, and a re-run
+# repairs only with a known matching folder and the complete literal command. It now abstains; the
+# old BACKED expectation is not claimed to pass. The same-folder positive lives in
+# tests/test_codex_2358d20_residuals.py (same_command_same_cwd_positive).
+check("C3 RETIRED: identical re-run with no recorded folder abstains (was BACKED)",
+      got == ("UNVERIFIABLE", "repair-unbound"), "/".join(got))
 
 for name, later in [
     ("suffix_bak", lambda s, t: f"check {t}.bak"),
@@ -196,8 +200,8 @@ check("C3 keep: exact-path write repair -> BACKED",
 s, t = command_case("bak_then_rerun", lambda s, t: f"check {t}.bak")
 s.tool("terminal", {"command": f"check {t}"}, status="ok", output="target check passed")
 got = s.finish(f"I fixed `{t}`.")
-check("C3 keep: unrelated success, then identical re-run -> BACKED",
-      got == ("BACKED", "written-this-session"), "/".join(got))
+check("C3 RETIRED: unrelated success, then identical re-run with no recorded folder abstains (was BACKED)",
+      got == ("UNVERIFIABLE", "repair-unbound"), "/".join(got))
 
 s, t = command_case("rerun_then_fail", lambda s, t: f"check {t}")
 s.tool("terminal", {"command": f"check {t}"}, status="error", output="target check failed again")

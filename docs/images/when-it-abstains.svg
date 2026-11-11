@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1212" role="img" aria-labelledby="t d" fill="#1f2328">
+  <title id="t">When it abstains</title>
+  <desc id="d">Decision flow for an absence claim such as "this file does not exist". If the session itself wrote or deleted the file, that write decides. Otherwise only a listing can decide: it must have run and succeeded, been one absolute path in an allowed form that reaches the file, had its output captured whole and uncut, and still be current, with nothing after it that could have changed the folder. Every "no" ends in abstention (unverifiable). If all hold, a listed name contradicts the claim and an unlisted name backs it.</desc>
+  <style>
+    .s{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif}
+    .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;font-size:14px}
+    .q{font-size:17px;font-weight:700}
+    .d{font-size:14px;fill:#57606a}
+    .n{font-size:14px;fill:#57606a}
+    .yn{font-size:14px;font-weight:700;fill:#57606a}
+    .box{fill:#f6f8fa;stroke:#57606a;stroke-width:1.5}
+    .ab{fill:#ddf4ff;stroke:#0969da;stroke-width:1.5}
+    .abt{font-size:15px;font-weight:700;fill:#0550ae}
+    .ar{stroke:#57606a;stroke-width:2;fill:none}
+    .num{fill:#57606a}
+    .numt{font-size:14px;font-weight:700;fill:#ffffff}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+
+  <!-- card: a solid light background keeps every label readable on GitHub dark mode -->
+  <rect x="2" y="2" width="996" height="1208" rx="18" fill="#ffffff" stroke="#d0d7de" stroke-width="2"/>
+
+  <text class="s" x="40" y="58" font-size="26" font-weight="700">When it abstains</text>
+  <text class="s n" x="40" y="88" font-size="16">Can this record prove a file is missing? Only a listing can say so, and every doubt ends in abstention.</text>
+
+  <!-- ===== 1: own write ===== -->
+  <rect class="box" x="40" y="120" width="580" height="84" rx="10"/>
+  <circle class="num" cx="68" cy="147" r="14"/><text class="s numt" x="68" y="152" text-anchor="middle">1</text>
+  <text class="s q" x="92" y="153">Did this session itself write or delete the file?</text>
+  <text class="s d" x="92" y="180">If so, that recorded write decides; no listing is needed.</text>
+
+  <path class="ar" d="M620 162 H676" marker-end="url(#a)"/>
+  <text class="s yn" x="648" y="154" text-anchor="middle">yes</text>
+  <rect x="680" y="114" width="280" height="96" rx="10" fill="#ffffff" stroke="#57606a" stroke-width="1.5"/>
+  <text class="s" x="698" y="142" font-size="15" font-weight="700">The write decides</text>
+  <text class="s" x="698" y="168" font-size="15">still there → <tspan font-weight="700" fill="#a40e26">contradicted</tspan></text>
+  <text class="s" x="698" y="192" font-size="15">deleted → <tspan font-weight="700" fill="#116329">backed</tspan></text>
+
+  <path class="ar" d="M330 204 V246" marker-end="url(#a)"/>
+  <text class="s yn" x="342" y="230">no</text>
+
+  <!-- ===== 2: ran and succeeded ===== -->
+  <rect class="box" x="40" y="250" width="580" height="96" rx="10"/>
+  <circle class="num" cx="68" cy="277" r="14"/><text class="s numt" x="68" y="282" text-anchor="middle">2</text>
+  <text class="s q" x="92" y="283">Did a listing of its folder run and succeed?</text>
+  <text class="s d" x="92" y="310">The newest listing covering the file; nothing older stands in,</text>
+  <text class="s d" x="92" y="332">and no later <tspan class="m">;</tspan>  <tspan class="m">||</tspan>  or  <tspan class="m">|</tspan> in the command could hide a failure.</text>
+
+  <path class="ar" d="M620 298 H676" marker-end="url(#a)"/>
+  <text class="s yn" x="648" y="290" text-anchor="middle">no</text>
+  <rect class="ab" x="680" y="270" width="280" height="56" rx="28"/>
+  <text class="s abt" x="820" y="303" text-anchor="middle">abstain · unverifiable</text>
+
+  <path class="ar" d="M330 346 V388" marker-end="url(#a)"/>
+  <text class="s yn" x="342" y="372">yes</text>
+
+  <!-- ===== 3: allowed form ===== -->
+  <rect class="box" x="40" y="392" width="580" height="140" rx="10"/>
+  <circle class="num" cx="68" cy="419" r="14"/><text class="s numt" x="68" y="424" text-anchor="middle">3</text>
+  <text class="s q" x="92" y="425">One absolute path, in an allowed form, reaching the file?</text>
+  <text class="s d" x="92" y="452"><tspan class="m">ls</tspan> with plain flags only (dotfiles need <tspan class="m">-a</tspan> or <tspan class="m">-A</tspan>), or</text>
+  <text class="m" x="92" y="474" fill="#57606a">find ROOT [-maxdepth N] [-name P] [-print]</text>
+  <text class="s d" x="92" y="496">One operand; no <tspan class="m">..</tspan>, globs, pipes or redirects; deep enough;</text>
+  <text class="s d" x="92" y="518">no symbolic link between the listing and the file.</text>
+
+  <path class="ar" d="M620 462 H676" marker-end="url(#a)"/>
+  <text class="s yn" x="648" y="454" text-anchor="middle">no</text>
+  <rect class="ab" x="680" y="434" width="280" height="56" rx="28"/>
+  <text class="s abt" x="820" y="467" text-anchor="middle">abstain · unverifiable</text>
+
+  <path class="ar" d="M330 532 V574" marker-end="url(#a)"/>
+  <text class="s yn" x="342" y="558">yes</text>
+
+  <!-- ===== 4: complete output ===== -->
+  <rect class="box" x="40" y="578" width="580" height="96" rx="10"/>
+  <circle class="num" cx="68" cy="605" r="14"/><text class="s numt" x="68" y="610" text-anchor="middle">4</text>
+  <text class="s q" x="92" y="611">Was its output captured whole and uncut?</text>
+  <text class="s d" x="92" y="638">Bound to its own call; at most 20,000 chars; no truncation mark;</text>
+  <text class="s d" x="92" y="660">and every row in a shape the parser knows.</text>
+
+  <path class="ar" d="M620 626 H676" marker-end="url(#a)"/>
+  <text class="s yn" x="648" y="618" text-anchor="middle">no</text>
+  <rect class="ab" x="680" y="598" width="280" height="56" rx="28"/>
+  <text class="s abt" x="820" y="631" text-anchor="middle">abstain · unverifiable</text>
+
+  <path class="ar" d="M330 674 V716" marker-end="url(#a)"/>
+  <text class="s yn" x="342" y="700">yes</text>
+
+  <!-- ===== 5: still current ===== -->
+  <rect class="box" x="40" y="720" width="580" height="170" rx="10"/>
+  <circle class="num" cx="68" cy="747" r="14"/><text class="s numt" x="68" y="752" text-anchor="middle">5</text>
+  <text class="s q" x="92" y="753">Is the listing still current?</text>
+  <text class="s d" x="92" y="780">Not if anything after it could have changed the folder:</text>
+  <text class="s d" x="92" y="802">a recorded write to the file; <tspan class="m">touch</tspan>, <tspan class="m">rm</tspan>, <tspan class="m">mv</tspan> … or a redirect</text>
+  <text class="s d" x="92" y="824">naming it or a folder above it; inline code (<tspan class="m">python3 -c</tspan>);</text>
+  <text class="s d" x="92" y="846">any command not known to be harmless (<tspan class="m">make</tspan>, <tspan class="m">git checkout</tspan>,</text>
+  <text class="s d" x="92" y="868"><tspan class="m">python3 build.py</tspan> …); anything it cannot parse.</text>
+
+  <path class="ar" d="M620 805 H676" marker-end="url(#a)"/>
+  <text class="s yn" x="648" y="797" text-anchor="middle">no</text>
+  <rect class="ab" x="680" y="777" width="280" height="56" rx="28"/>
+  <text class="s abt" x="820" y="810" text-anchor="middle">abstain · unverifiable</text>
+
+  <path class="ar" d="M330 890 V932" marker-end="url(#a)"/>
+  <text class="s yn" x="342" y="916">yes</text>
+
+  <!-- ===== 6: is the name listed ===== -->
+  <rect class="box" x="40" y="936" width="580" height="84" rx="10"/>
+  <circle class="num" cx="68" cy="963" r="14"/><text class="s numt" x="68" y="968" text-anchor="middle">6</text>
+  <text class="s q" x="92" y="969">Does the listing show the file's name?</text>
+  <text class="s d" x="92" y="996">Read in the exact folder the claim names.</text>
+
+  <path class="ar" d="M620 978 H676" marker-end="url(#a)"/>
+  <text class="s yn" x="648" y="970" text-anchor="middle">yes</text>
+  <rect x="680" y="946" width="280" height="64" rx="12" fill="#ffebe9" stroke="#cf222e" stroke-width="1.5"/>
+  <text class="s" x="820" y="972" font-size="16" font-weight="700" text-anchor="middle" fill="#a40e26">contradicted</text>
+  <text class="m" x="820" y="996" text-anchor="middle" fill="#a40e26">listed-present</text>
+
+  <path class="ar" d="M330 1020 V1062" marker-end="url(#a)"/>
+  <text class="s yn" x="342" y="1046">no</text>
+
+  <!-- ===== backed ===== -->
+  <rect x="40" y="1066" width="580" height="64" rx="12" fill="#dafbe1" stroke="#1a7f37" stroke-width="1.5"/>
+  <text class="s" x="62" y="1094" font-size="17" font-weight="700" fill="#116329">backed: absence established</text>
+  <text class="s d" x="62" y="1118">The name is not among what the listing printed.</text>
+
+  <!-- footer -->
+  <text class="s n" x="40" y="1166">Reason code search-scope: steps 2, 3, 5, and a cut output at 4. listing-unobserved: output not captured or unreadable.</text>
+  <text class="s n" x="40" y="1188">Only a claim whose file can be located is judged: an absolute path, or a bare name the session changed or saw.</text>
+</svg>

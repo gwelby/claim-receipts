@@ -97,6 +97,24 @@ class Claim:
     scope_all: bool = False
 
 
+_REL_PATH = re.compile(r"(?<![\w/.:-])((?:\.{1,2}/)?[\w.~-]+(?:/[\w.~-]+)+)")
+
+
+def _relative_path_in(text: str) -> str | None:
+    """A relative path with a folder named in a sentence (`docs/report.md`, `./out/a`), or None.
+
+    Only a path-shaped token counts: it starts with `./` or `../`, or its last part is a file name with
+    an extension. Ordinary slashed words ("the read/write layout") are not paths."""
+    for m in _REL_PATH.finditer(text or ""):
+        tok = m.group(1)
+        if "://" in text[max(0, m.start() - 3):m.start() + 3]:
+            continue
+        last = tok.rsplit("/", 1)[-1]
+        if tok.startswith(("./", "../")) or re.search(r"\.[A-Za-z0-9]{1,6}$", last):
+            return tok
+    return None
+
+
 def extract_claims(text: str) -> list[Claim]:
     """Sentences that assert something checkable. One Claim per sentence, strongest shape wins."""
     out: list[Claim] = []
@@ -163,7 +181,9 @@ def resolve(subject: str | None, ev: Evidence) -> str | None:
     seen: list[str] = []
     for p in list(ev.mutations) + (list(ev.fs) if ev.fs else []):
         base = os.path.basename(os.path.normpath(p)).lower()
-        if base == want or base.startswith(want + "_") or base.startswith(want + "-"):
+        # Exact name only. Accepting `want_*` / `want-*` let "app.py exists" be backed by a write
+        # to app.py-backup (definitions pass, 2026-11-11). NARROWED.
+        if base == want:
             if p not in seen:
                 seen.append(p)
     if not seen:
@@ -212,7 +232,11 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
         if about_existence and path and path in ev.mutations and ev.mutations[path].get("exists"):
             return Verdict("CONTRADICTED", "was-confirmable",
                            f"the session produced {path} and then claimed it could not confirm it")
-        if ev.has_observation(path or claim.subject):
+        # A hedge that names a relative path with a folder (`docs/report.md`) is about that path, not
+        # unscoped: PATHISH misses it, and as an unscoped hedge any web_search backed it (definitions
+        # pass, 2026-11-11). A relative subject never matches an observation, so such a hedge is
+        # UNBACKED (hedge-unobserved): the session never looked at a path it can be bound to.
+        if ev.has_observation(path or claim.subject or _relative_path_in(claim.text)):
             return Verdict("BACKED", "hedge-matches-scope",
                            "the claim reports the limits of a search the session actually ran")
         return Verdict("UNBACKED", "hedge-unobserved",
@@ -446,35 +470,28 @@ def _measurement_names(m: tuple, path: str | None) -> bool:
 def _same_check(e: dict, standing: dict) -> bool:
     """Is event <e> the failing check <standing> run again?
 
-    Identical TEXT is not an identical check: `python3 check /x/report.md` run from folder A and
-    from folder B runs two different `check` programs (Codex 2358d20 R1; 6a6aae3 N1, an
-    extensionless script). A re-run counts only when BOTH calls recorded their folder and the
-    folders match. With either folder unknown (Hermes's terminal tool does not pass one to the
-    hook), the re-run counts only when nothing in it depends on a folder: every operand after the
-    program is an option or an absolute path. Any other word, `check` as much as `check.py` or a
-    `grep` pattern, refuses (fail closed); such a repair abstains (`repair-unbound`).
+    Codex's minimum for re-run repair (6dc1938, N1): a KNOWN, MATCHING working folder and the
+    COMPLETE, LITERAL command, otherwise abstain. Identical text from an unknown folder is not an
+    identical check (`python3 -mcheck /x/T` loads a different local module in another folder, M1);
+    collapsing whitespace equates different quoted arguments (M2); a command the ledger had to cut
+    may differ after the cut (M3). RETIRED (explicitly): every re-run repair with a folder unknown,
+    including all-absolute ones, now abstains (`repair-unbound`). Hermes's terminal tool does not pass
+    the folder to the hook, so on a live session a failed check is cleared only by a recorded write
+    to the exact target.
     """
-    if _norm_cmd(e["cmd"]) != _norm_cmd(standing["cmd"]):
-        return False
     a, b = e.get("cwd"), standing.get("cwd")
-    if a and b:
-        return os.path.normpath(a) == os.path.normpath(b)
-    segs = _segments(e["cmd"])
-    if segs is None:
+    if not (a and b) or os.path.normpath(a) != os.path.normpath(b):
         return False
-    for sg in segs:
-        argv, targets = _strip_redirects(sg.tokens)
-        if targets:
-            return False                     # a redirect target is a path the folder decides
-        for t in argv[1:]:
-            if not (t.startswith("-") or os.path.isabs(t)):
-                return False
-    return True
+    if e.get("cut") or standing.get("cut"):
+        return False
+    ca, cb = e.get("cmd") or "", standing.get("cmd") or ""
+    if len(ca) >= _LEDGER_COMMAND_CAP or len(cb) >= _LEDGER_COMMAND_CAP:
+        return False                              # may have been cut by the ledger
+    return ca == cb
 
 
-def _norm_cmd(cmd: str) -> str:
-    """Whitespace-normalized command text, for the identical-rerun repair test."""
-    return " ".join((cmd or "").split())
+# ledger.py stores at most this many characters of a command (see post_tool_call).
+_LEDGER_COMMAND_CAP = 2000
 
 
 def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
@@ -549,9 +566,11 @@ def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
                            f"newer sibling(s): {', '.join(os.path.basename(n) for n in newer[:3])}")
         entity = ev.entity_of(path)
         listing = ev.searched_for(os.path.dirname(entity))
-        if listing is None:
+        if listing is None or not listing.covers(entity):
+            # A listing a later command may have made stale cannot vouch that nothing newer
+            # appeared (definitions pass, 2026-11-11: `ls` then `make build` was BACKED).
             return Verdict("UNVERIFIABLE", "outside-session",
-                           "no directory listing ran, so 'current' was never checked")
+                           "no current listing covers it, so 'current' was never checked")
         return Verdict("BACKED", "newest-in-scope",
                        f"no newer sibling of {os.path.basename(entity)} under {listing.root}")
 
@@ -568,11 +587,14 @@ def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
                            f"{path} was deleted this session")
         if path and ev.stat(path).get("exists"):
             listing = ev.searched_for(path)
-            return (Verdict("BACKED", "listed-this-session", path) if listing
+            return (Verdict("BACKED", "listed-this-session", path) if listing and listing.covers(path)
                     else Verdict("UNVERIFIABLE", "outside-session", f"{path} exists but was not touched"))
         if path:
             listing = ev.searched_for(os.path.dirname(path))
-            if listing and listing.covers(path):
+            entries = ev.entries_of(listing) if listing and listing.covers(path) else None
+            if entries is not None and os.path.basename(path) not in entries:
+                # Contradicted only by what the listing was SEEN to print, as for absence; an
+                # uncaptured listing is no observation (definitions pass, 2026-11-11).
                 return Verdict("CONTRADICTED", "artifact-missing", f"absent inside {listing.root}")
             return Verdict("UNBACKED", "artifact-missing",
                            f"nothing at {path} and no write this session")

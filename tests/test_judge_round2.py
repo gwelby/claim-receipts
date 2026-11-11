@@ -127,8 +127,11 @@ t = s.scope / "report.md"
 s.write(t, "x\n")
 s.recorded("check " + q(t), "fail", rc=1)
 s.recorded("check " + q(t), "ok", rc=0)
-expect("POS identical absolute-path re-run still repairs",
-       s.verdict(f"I fixed {t}."), ("BACKED", "written-this-session"))
+# RETIRED by Codex 6dc1938 N1 (explicitly): no folder is recorded here, and a re-run repairs only with
+# a known matching folder and the complete literal command, so this abstains; the old BACKED
+# expectation is not claimed to pass.
+expect("RETIRED identical absolute-path re-run with no recorded folder abstains (was BACKED)",
+       s.verdict(f"I fixed {t}."), ("UNVERIFIABLE", "repair-unbound"))
 
 s = Session("f6_pos_abs_rerun_then_fail")
 t = s.scope / "report.md"
