@@ -154,6 +154,16 @@ s.sh(f"python3 {q(s.scope / 'measure.py')} {q(img)}")
 expect("POS a script FILE measuring the subject still backs",
        s.verdict(f"{img} is full-page."), ("BACKED", "measurement-agrees"))
 
+s = Session("f1_pos_deep_path")
+deep = s.scope / ("nested_" * 12) / ("deeper_" * 10)
+deep.mkdir(parents=True)
+img = deep / "page.png"
+img.write_bytes(b"x")
+(s.scope / "measure.py").write_text("import sys\nprint(sys.argv[1], 'ink coverage 100%')\n")
+s.sh(f"python3 {q(s.scope / 'measure.py')} {q(img)}")
+expect(f"POS a measurement line naming a {len(str(img))}-character path still backs (was cut at 100)",
+       s.verdict(f"{img} is full-page."), ("BACKED", "measurement-agrees"))
+
 s = Session("f1_pos_recorded_tool")
 img = s.scope / "page.png"
 s.recorded(f"python3 /opt/tools/measure.py {q(img)}", "ink bbox full; coverage 100%")

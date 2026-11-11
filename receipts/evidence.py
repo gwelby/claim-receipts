@@ -131,6 +131,11 @@ def _inline_code(tokens: list[str]) -> bool:
 # match, diff/cmp found a difference, test/[ evaluated false, `git diff --exit-code|--quiet` found a
 # change. Exit 2 (or more) is still trouble. Defined ONCE here; judge.py's lifecycle side (lane A3)
 # needs the same set and may import it (integrator: unify on this definition).
+# A measurement line is kept up to this many characters. It used to be 100, which cut the subject's
+# own path off any measurement made in a folder nested a little deep, so a genuine measurement
+# abstained depending on where the session ran (found 2026-11-11 by the return packet's run).
+MEASURE_LINE_CAP = 4096
+
 EXIT1_RESULT_VERBS = frozenset({"grep", "egrep", "fgrep", "rg", "diff", "cmp", "test", "[", "[["})
 # Redirect targets that cannot themselves fail and so cannot be the source of an exit status 1.
 _SAFE_REDIRECT_TARGETS = {"/dev/null", "1", "2"}
@@ -1141,7 +1146,7 @@ class Evidence:
                         if 0.0 <= val <= 1.0:
                             # Carry the producing command too — the subject join happens
                             # on command+line, not the bare number (R3c).
-                            out.append((val, line.strip()[:100], cmd))
+                            out.append((val, line.strip()[:MEASURE_LINE_CAP], cmd))
         return out
 
     @classmethod

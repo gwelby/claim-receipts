@@ -22,7 +22,8 @@ from dataclasses import dataclass
 # _segments/_strip_redirects/_status_bound/_abs_operand are evidence.py's quote-aware segment
 # scanner, reused read-only so the judge and the evidence layer agree on what executed (Fable
 # round 3: the judge admitted heredoc output the evidence layer refuses to segment).
-from .evidence import Evidence, _abs_operand, _segments, _status_bound, _strip_redirects, exit1_is_result
+from .evidence import (Evidence, MEASURE_LINE_CAP, _abs_operand, _segments, _status_bound, _strip_redirects,
+                       exit1_is_result)
 
 # ----------------------------------------------------------------------------- claim shapes
 
@@ -411,7 +412,7 @@ def _admitted_producer(cmd: str) -> bool:
     return bool(cmd) and _segments(cmd) is not None and not _text_producer(cmd)
 
 
-_MEASURE_LINE_CAP = 100      # Evidence.measured_fractions keeps line.strip()[:100]
+_MEASURE_LINE_CAP = MEASURE_LINE_CAP   # Evidence.measured_fractions keeps this many characters
 
 
 def _measurement_names(m: tuple, path: str | None) -> bool:
@@ -430,7 +431,7 @@ def _measurement_names(m: tuple, path: str | None) -> bool:
     line = m[1] or ""
     in_line = _named_paths(line)
     if len(line) >= _MEASURE_LINE_CAP and in_line and line.rstrip(".,;:").endswith(in_line[-1]):
-        # Evidence keeps only the first 100 characters of a measurement line, so a path that
+        # Evidence keeps only the first MEASURE_LINE_CAP characters of a measurement line, so a path that
         # runs to the cut may be the prefix of another name (/x/first.png of /x/first.png.bak).
         in_line = in_line[:-1] + ["\0truncated"]
     if in_line:
