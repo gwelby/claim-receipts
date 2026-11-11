@@ -195,18 +195,42 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
     # Hedge still preempts: reporting "I could not verify all of it" is honest
     # uncertainty, not an extent assertion.
     if claim.scope_all:
-        if claimed_count and evidence_count is not None:
-            if evidence_count < claimed_count:
-                return Verdict("UNBACKED", "scope-narrower",
-                               f"claim covers {claimed_count}, evidence covers {evidence_count}")
-            return Verdict("BACKED", "scope-covered", f"{evidence_count} of {claimed_count}")
         # Production carries no injected counts: an extent claim we cannot bind
-        # abstains rather than silently falling through (R2).
-        if claimed_count is None or evidence_count is None:
+        # abstains rather than silently falling through (R2). A zero claimed
+        # count binds nothing either.
+        if not claimed_count or evidence_count is None:
             return Verdict("UNVERIFIABLE", "scope-unbindable",
                            "the claim asserts an extent ('all/every') but no countable "
                            "scope was bound this session")
+        if evidence_count < claimed_count:
+            return Verdict("UNBACKED", "scope-narrower",
+                           f"claim covers {claimed_count}, evidence covers {evidence_count}")
+        # Counts that cover the extent are ADMISSION, not proof (Codex C1, fdb8f87):
+        # "2 of 2 images were measured" says nothing about whether each one is
+        # full-page. The claimed property is still judged by its kind, so a joined
+        # 53% measurement contradicts "all 2 images are full-page".
+        # RETIRED favorable branch: the old `BACKED / scope-covered` verdict is gone.
+        # The kind branches judge ONE resolved subject, so their favorable verdict
+        # cannot speak for every member of the extent — it abstains instead.
+        # Unfavorable verdicts stand: one member failing the property is enough to
+        # contradict (or leave unbacked) a claim about all of them.
+        v = _judge_kind(claim, ev, path)
+        if v.verdict == "BACKED":
+            return Verdict("UNVERIFIABLE", "scope-property-unbound",
+                           f"{evidence_count} of {claimed_count} in scope, but only "
+                           f"{os.path.basename(path or claim.subject or '') or 'one subject'} "
+                           f"was judged for the claimed property ({v.reason})")
+        return v
+    return _judge_kind(claim, ev, path)
 
+
+def _norm_cmd(cmd: str) -> str:
+    """Whitespace-normalized command text, for the identical-rerun repair test."""
+    return " ".join((cmd or "").split())
+
+
+def _judge_kind(claim: Claim, ev: Evidence, path: str | None) -> Verdict:
+    """The single-subject kind branches. Callers apply hedge and scope admission first."""
     # ---- coverage: a measured percentage can contradict an extent claim (case #7) ----
     if claim.kind == "coverage":
         measured = ev.measured_fractions()
@@ -302,23 +326,50 @@ def judge(claim: Claim, ev: Evidence, evidence_count: int | None = None,
     # session's own later evidence — "I fixed it" followed by an error on the same thing.
     if path and SUCCESS.search(claim.text):
         subject_tokens = {path, os.path.basename(path)}
-        # Lifecycle: an error repaired by a LATER successful command on the same
-        # subject is not a standing failure — judge the last event, not any failure.
+        # Lifecycle: an error repaired LATER is not a standing failure — judge the
+        # last event, not any failure.
+        #
+        # A failing command joins the subject loosely (path or basename substring):
+        # that direction can only withhold a favorable verdict. A REPAIR is bound
+        # strictly (Codex C3, fdb8f87): substring joins let a successful
+        # `check report.md.bak`, `check /other/report.md` or `printf "check <target>"`
+        # erase a recorded target failure. Admitted repairs are now only
+        #   - an exact-normalized-path write to the target (round-3, unchanged), or
+        #   - the identical failing command re-run and succeeding.
+        # NARROWED favorable branch: any OTHER successful command that merely names the
+        # subject no longer repairs; it makes the failure's standing unknown, so the
+        # claim abstains (UNVERIFIABLE / repair-unbound) instead of being BACKED.
+        # No command text is parsed to decide this.
         last = None
+        failed_cmd = None          # the standing failure's command text, if any
+        unbound_success = None     # a later success naming the subject that is no rerun
         for e in ev.events:
             if e["kind"] == "command":
-                if any(tok and tok in e["cmd"] for tok in subject_tokens):
-                    last = e
+                if not any(tok and tok in e["cmd"] for tok in subject_tokens):
+                    continue
+                if not e.get("ok"):
+                    last, failed_cmd, unbound_success = e, e["cmd"], None
+                elif failed_cmd is None:
+                    last = e                       # nothing standing to repair
+                elif _norm_cmd(e["cmd"]) == _norm_cmd(failed_cmd):
+                    last, failed_cmd, unbound_success = e, None, None
+                else:
+                    unbound_success = e            # names the subject, repairs nothing proven
             elif e["kind"] == "write" and e.get("path") and \
                     os.path.normpath(e["path"]) == os.path.normpath(path):
                 # Writes join on the exact normalized target identity — a substring
                 # or basename match lets /other/report.md or report.md.bak pose as
                 # a repair of report.md and cancel a standing failure (round-3).
-                last = e
+                last, failed_cmd, unbound_success = e, None, None
         if last is None:
             for cmd in ev.commands_for_error():   # legacy path: no event order kept
                 if any(tok and tok in cmd for tok in subject_tokens):
                     last = {"cmd": cmd, "ok": False}
+        if unbound_success is not None:
+            return Verdict("UNVERIFIABLE", "repair-unbound",
+                           f"a command on this subject failed ({failed_cmd[:50]}); the later "
+                           f"success ({unbound_success['cmd'][:50]}) is not that check re-run "
+                           "or a write to the target, so the failure's standing is unknown")
         if last is not None and last.get("kind", "command") == "command" and not last.get("ok"):
             return Verdict("CONTRADICTED", "later-error",
                            f"the last command on this subject failed: {last['cmd'][:70]}")
