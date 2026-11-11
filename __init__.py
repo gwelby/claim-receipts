@@ -1,9 +1,9 @@
-"""Entry point for the ``receipts`` plugin.
+"""Entry point for the ``claim-receipts`` plugin.
 
 Registered surface (must match plugin.yaml `capabilities`):
 
     hooks     pre_tool_call, post_tool_call, on_session_end
-    command   /receipts
+    command   /claim-receipts
 
 Design rule for this file: every handler is a thin, exception-swallowing wrapper. A plugin that can
 break a user's tool call is worse than the problem it solves, so nothing here is allowed to raise.
@@ -28,7 +28,7 @@ def _safe(fn, label: str):
 
 
 def _handle_slash(raw_args: str = "") -> str:
-    """`/receipts` — what this session has proven so far."""
+    """`/claim-receipts` — what this session has proven so far."""
     try:
         from .receipts import claims
         return claims.render_session_summary(raw_args)
@@ -55,7 +55,7 @@ def register(ctx) -> None:
     ctx.register_hook("post_tool_call", _safe(ledger.post_tool_call, "post_tool_call"))
     ctx.register_hook("on_session_end", _safe(_session_end, "on_session_end"))
     ctx.register_command(
-        "receipts",
+        "claim-receipts",
         handler=_handle_slash,
         description="Show what this session has actually proven: evidence ledger and claims.",
     )
