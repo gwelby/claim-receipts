@@ -17,7 +17,7 @@ PY=/usr/bin/python3.12
 cd "$REPO" || exit 1
 
 # R8: the rm -rf below destroys whatever OUT resolves to — and DID: on 2026-11-07 a
-# run with OUT=/home/greg/work deleted the entire working tree (repo included) because
+# run with OUT set to the repo's parent folder deleted the entire working tree (repo included) because
 # the dirty-check sat AFTER the rm. Every refusal below happens BEFORE any write or
 # deletion, and the incident stays named here because a guard without the scar invites
 # someone to remove it.
@@ -202,18 +202,23 @@ cat > "$OUT/outward_commands.md" <<EOF
 Nothing below has been run. The repository does not exist; there are no remotes.
 
 ## 1. Create the empty public repo
-    gh repo create gwelby/hermes-plugin-receipts --public \\
-        --description "Receipts — proof of work for AI agent sessions"
+    gh repo create gwelby/claim-receipts --public \\
+        --description "claim-receipts: what an agent said vs what it did"
 
 ## 2. Push this exact commit — the reviewed tree, pinned by SHA not branch name
-    git remote add origin git@github.com:gwelby/hermes-plugin-receipts.git
-    git push -u origin $COMMIT:refs/heads/master
-    # verify (scoped to the one ref; must print exactly $COMMIT):
-    git ls-remote origin refs/heads/master | grep -F "$COMMIT"
+    # a NEW remote name: an existing remote may be a review bundle, not a repo
+    git remote add public https://github.com/gwelby/claim-receipts.git
+    git push public $COMMIT:refs/heads/main
+    # verify anonymously (no credentials; must print exactly $COMMIT):
+    git ls-remote https://github.com/gwelby/claim-receipts.git refs/heads/main | grep -F "$COMMIT"
 
-## 3. Post the entry (after the video exists)
-    # attach: demo.mp4 (<= 90 s), repo URL, one paragraph
-    # tag @NousResearch, post the link in their Discord
+## 3. Open the catalog PR (it must be open by the deadline; merging is the maintainers')
+    # one new file, plugin-catalog/claim-receipts.yaml, sha: $COMMIT, in a PR to
+    # NousResearch/hermes-agent from a fork, with the disclosure lines in the PR text
+
+## 4. Post the demo on X (after the video exists): <= 90 s, tag @NousResearch, one paragraph
+
+## 5. Send the X post link and the catalog PR link through the entry form
 
 ## Preconditions, per the publish gate
 - [ ] Codex reviews this package and PASSES (not self-check)

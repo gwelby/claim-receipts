@@ -308,7 +308,7 @@ check("baseline Day-3 stage intercepted exactly once", r["py"] == 1, r["py"])
 check("baseline sidecar = exported (committed) bytes", r["sums"] == f"{SHA_T}  tracked.txt\n", r["sums"])
 check("baseline seven validator lines retained",
       r["log"] is not None and all(f"synthetic validator output line {i}" in r["log"] for i in range(1, 8)))
-check("pinned-SHA push retained", r["outward"] is not None and f"git push -u origin {COMMIT}:refs/heads/master" in r["outward"])
+check("pinned-SHA push retained (to a new remote, never an existing one)", r["outward"] is not None and f"git push public {COMMIT}:refs/heads/main" in r["outward"] and "git remote add origin" not in r["outward"])
 r = run("two_file_export_positive", second_file=1)
 no_harness(r, "two-file")
 check("two-file positive exit 0", r["exit"] == 0, r["stderr"][-300:])
