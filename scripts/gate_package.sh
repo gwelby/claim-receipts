@@ -36,11 +36,20 @@ case "$CANON_REPO" in
   "$CANON_OUT"|"$CANON_OUT/"*)
     echo "REFUSING: output path is an ancestor of the source tree: $CANON_OUT" >&2; exit 2;;
 esac
-# Pre-existing non-empty dir that is not the sanctioned location: never rm unknown data.
-if [ -d "$CANON_OUT" ] && [ -n "$(ls -A "$CANON_OUT" 2>/dev/null)" ]    && [ "$CANON_OUT" != "$CANON_REPO/GATE_PACKAGE" ]; then
-  echo "REFUSING: output path exists and is not empty: $CANON_OUT — will not rm an unknown directory." >&2; exit 2
+# OUTPUT POLICY (C5 return, 2026-11-10) — the broad rule, stated once: the ONLY pre-existing output
+# this script will ever remove is its own sanctioned package dir, $REPO/GATE_PACKAGE. Any other OUT
+# that already exists in ANY form — empty directory, non-empty directory, regular file, symlink
+# (dangling or not) — is refused. Pass a path that does not exist yet.
+# Chosen over "allow safe empty directories" because it needs NO directory enumeration: fdb8f87 ran
+# `ls -A ... 2>/dev/null` and treated empty TEXT as empty, so an unreadable listing read as "empty".
+# Here nothing is listed, so an enumeration error can never be counted as emptiness; the final
+# `mkdir` (no -p) is also atomic, so a path created after this test still fails instead of being reused.
+if [ "$CANON_OUT" != "$CANON_REPO/GATE_PACKAGE" ]; then
+  if [ -e "$OUT" ] || [ -L "$OUT" ] || [ -e "$CANON_OUT" ] || [ -L "$CANON_OUT" ]; then
+    echo "REFUSING: output path already exists: $CANON_OUT — only $CANON_REPO/GATE_PACKAGE is ever replaced; pass a new path." >&2; exit 2
+  fi
 fi
-# A regular file at OUT is refused too — rm -rf would otherwise delete an unknown file.
+# A regular file at the sanctioned location is refused too — rm -rf would otherwise delete an unknown file.
 if [ -e "$CANON_OUT" ] && [ ! -d "$CANON_OUT" ]; then
   echo "REFUSING: output path exists and is not a directory: $CANON_OUT" >&2; exit 2
 fi
@@ -53,27 +62,85 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   git status --porcelain | head -20 >&2
   exit 2
 fi
-rm -rf "$OUT"; mkdir -p "$OUT"
+# Only the sanctioned dir is ever removed (policy above); every other OUT is known not to exist.
+if [ "$CANON_OUT" = "$CANON_REPO/GATE_PACKAGE" ]; then rm -rf -- "$CANON_OUT"; fi
+if ! mkdir -p -- "$(dirname -- "$CANON_OUT")" || ! mkdir -- "$CANON_OUT"; then
+  echo "REFUSING: could not create a fresh output directory: $CANON_OUT" >&2; exit 2
+fi
+OUT="$CANON_OUT"   # absolute from here on; checks below run in another cwd
 
-COMMIT=$(git rev-parse HEAD)
-git log -1 --format='commit %H%nAuthor %an <%ae>%nDate   %aI%n%n%s' > "$OUT/HEAD.txt"
+# Any failure in producing the bound export or its hashes ABORTS (exit 3). fdb8f87 ignored
+# these statuses, so a failed or partial archive still ended 0 with a partial tree.sha256.
+abort_pkg() { echo "REFUSING: package failed — $*" >&2; exit 3; }
+
+COMMIT=$(git rev-parse --verify 'HEAD^{commit}') || abort_pkg "cannot resolve HEAD to a commit"
+[ -n "$COMMIT" ] || abort_pkg "empty commit id"
+git log -1 --format='commit %H%nAuthor %an <%ae>%nDate   %aI%n%n%s' "$COMMIT" > "$OUT/HEAD.txt"
 git bundle create "$OUT/history.bundle" --all >/dev/null 2>&1
-git log --stat --format='%n=== %h %aI %s' > "$OUT/history.txt"
-# every tracked file, hashed from an IMMUTABLE export of the commit — not the live
-# tree — so the sidecar cannot absorb drift introduced after the dirty check's instant
-EXPORT_TMP="$(mktemp -d)"; trap 'rm -rf "$EXPORT_TMP"' EXIT
-git archive "$COMMIT" | tar -x -C "$EXPORT_TMP"
-git ls-files | sort | (cd "$EXPORT_TMP" && xargs -d '\n' sha256sum) > "$OUT/tree.sha256" 2>/dev/null
+git log --stat --format='%n=== %h %aI %s' "$COMMIT" > "$OUT/history.txt"
+
+# ---- 1. C5: ONE immutable export of COMMIT is the thing hashed AND the thing checked ----
+# * file list: `git ls-tree` of the pinned COMMIT — never the live index (`git ls-files` let an
+#   index omission leave a committed file unhashed)
+# * bytes: every exported file must hash to its blob id IN that commit (hash-object --no-filters),
+#   and the export must hold exactly those files — nothing missing, nothing extra
+# * statuses: archive, tar, ls-tree, hash-object and sha256sum are each gated; the sidecar must
+#   have exactly one line per committed file
+# * checks (section 2) run INSIDE this export, not in the live cwd
+WORK="$(mktemp -d)" || abort_pkg "mktemp failed"
+{ [ -n "$WORK" ] && [ -d "$WORK" ]; } || abort_pkg "mktemp gave no directory"
+trap 'rm -rf -- "$WORK"' EXIT
+EXPORT="$WORK/tree"
+mkdir -- "$EXPORT" || abort_pkg "cannot create export dir"
+git archive "$COMMIT" | tar -x -C "$EXPORT"
+ST=("${PIPESTATUS[@]}")
+[ "${ST[0]}" -eq 0 ] && [ "${ST[1]}" -eq 0 ] || abort_pkg "export of $COMMIT failed (git archive=${ST[0]}, tar=${ST[1]})"
+git ls-tree -r -z --full-tree "$COMMIT" > "$WORK/ls-tree.z" || abort_pkg "git ls-tree $COMMIT failed"
+PATHS=(); BLOBS=()
+while IFS= read -r -d '' entry; do
+  meta=${entry%%$'\t'*}; path=${entry#*$'\t'}
+  read -r mode otype oid <<<"$meta"
+  case "$mode $otype" in
+    "100644 blob"|"100755 blob") ;;
+    *) abort_pkg "unsupported tree entry '$mode $otype' at '$path' — only regular files can be exported, blob-verified and hashed";;
+  esac
+  case "$path" in *$'\n'*|*\\*) abort_pkg "unsupported path name (newline/backslash) in $COMMIT";; esac
+  PATHS+=("$path"); BLOBS+=("$oid")
+done < "$WORK/ls-tree.z"
+N=${#PATHS[@]}
+[ "$N" -gt 0 ] || abort_pkg "commit $COMMIT lists no files"
+for p in "${PATHS[@]}"; do
+  { [ -f "$EXPORT/$p" ] && [ ! -L "$EXPORT/$p" ]; } || abort_pkg "export is missing committed file: $p"
+done
+find "$EXPORT" -mindepth 1 ! -type d -printf . > "$WORK/found" || abort_pkg "cannot enumerate the export"
+NFOUND=$(wc -c < "$WORK/found")
+[ "$NFOUND" -eq "$N" ] || abort_pkg "export holds $NFOUND non-directory entries; commit lists $N"
+for p in "${PATHS[@]}"; do printf '%s\n' "$EXPORT/$p"; done > "$WORK/export_paths"
+git hash-object --no-filters --stdin-paths < "$WORK/export_paths" > "$WORK/oids" || abort_pkg "git hash-object over the export failed"
+mapfile -t GOT < "$WORK/oids"
+[ "${#GOT[@]}" -eq "$N" ] || abort_pkg "hash-object returned ${#GOT[@]} ids for $N files"
+for i in "${!PATHS[@]}"; do
+  [ "${GOT[$i]}" = "${BLOBS[$i]}" ] || abort_pkg "exported bytes of ${PATHS[$i]} are not blob ${BLOBS[$i]} of $COMMIT"
+done
+( cd "$EXPORT" && sha256sum -- "${PATHS[@]}" ) > "$OUT/tree.sha256" || abort_pkg "sha256sum over the export failed"
+NSUM=$(wc -l < "$OUT/tree.sha256")
+[ "$NSUM" -eq "$N" ] || abort_pkg "tree.sha256 has $NSUM lines for $N committed files"
 echo "$COMMIT" > "$OUT/COMMIT"
 
-# ---- 2. reproduction: run the checks, keep the RAW output, and CAPTURE the exits
+# ---- 2. reproduction: run the checks IN THE EXPORT, keep the RAW output, and CAPTURE the exits
 # — round-3: exit codes used to be logged then discarded; they now gate final status
+# — C5: fdb8f87 ran these in the live cwd while tree.sha256 described the export, so the checked
+#   bytes and the hashed bytes could differ. Now both are the same export of $COMMIT.
 TEST_EXIT=0; ACC_EXIT=0; VAL_EXIT=0
 {
-  echo "### make test"; make test 2>&1; TEST_EXIT=$?; echo "exit=$TEST_EXIT"
-  echo; echo "### make acceptance"; make acceptance 2>&1; ACC_EXIT=$?; echo "exit=$ACC_EXIT"
-  echo; echo "### hermes plugins validate ."; hermes plugins validate . 2>&1; VAL_EXIT=$?; echo "exit=$VAL_EXIT"
+  echo "# checks run in an export of $COMMIT (not the live tree)"
+  echo "### make test"; ( cd "$EXPORT" && make test ) 2>&1; TEST_EXIT=$?; echo "exit=$TEST_EXIT"
+  echo; echo "### make acceptance"; ( cd "$EXPORT" && make acceptance ) 2>&1; ACC_EXIT=$?; echo "exit=$ACC_EXIT"
+  echo; echo "### hermes plugins validate ."; ( cd "$EXPORT" && hermes plugins validate . ) 2>&1; VAL_EXIT=$?; echo "exit=$VAL_EXIT"
 } > "$OUT/reproduction.log" 2>&1
+# the checks must not have changed the bytes they checked (so checked == hashed at the end too)
+( cd "$EXPORT" && sha256sum -c --quiet --strict -- "$OUT/tree.sha256" ) >"$WORK/recheck.log" 2>&1
+RECHECK_EXIT=$?
 
 # ---- 3. the Day-3 measurement, with its definition written down ----
 SESSION="${RECEIPTS_SESSION:-}"
@@ -160,7 +227,7 @@ EOF
   echo
   echo "Commit: \`$COMMIT\`"
   echo "Built:  $(date -Iseconds)"
-  echo "Files:  $(git ls-files | wc -l) tracked"
+  echo "Files:  $N in $COMMIT (from git ls-tree of the commit; each exported, blob-verified, hashed and checked)"
   echo
   echo "| file | what it proves |"
   echo "|---|---|"
@@ -192,7 +259,24 @@ done
 if ! git bundle verify "$OUT/history.bundle" >/dev/null 2>&1; then
   MISSING="$MISSING history.bundle(unverifiable)"
 fi
+# the bundle's HEAD must be the packaged commit (it is still --all: selecting outgoing refs is a
+# separate disclosure decision, not made here)
+BUNDLE_HEAD=$(git bundle list-heads "$OUT/history.bundle" 2>/dev/null | awk '$2=="HEAD"{print $1; exit}')
+[ "$BUNDLE_HEAD" = "$COMMIT" ] || MISSING="$MISSING history.bundle(HEAD:${BUNDLE_HEAD:-none}!=COMMIT)"
 FAILED=""
+[ "$RECHECK_EXIT" -eq 0 ] || FAILED="$FAILED export-changed-by-checks($RECHECK_EXIT)"
+# C5 end guard: the clean-tree precondition must still hold when the package is finished. The checks
+# no longer read live bytes, but a live tree/index/HEAD that moved during the build means the
+# operator's tree is no longer the one packaged — refuse rather than ship an ambiguous package.
+END_HEAD=$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null)
+[ "$END_HEAD" = "$COMMIT" ] || FAILED="$FAILED head-moved(${END_HEAD:-unresolvable})"
+if ! git diff --quiet || ! git diff --cached --quiet; then FAILED="$FAILED live-tree-changed-during-build"; fi
+if git ls-files -z > "$WORK/index.z"; then
+  printf '%s\0' "${PATHS[@]}" | LC_ALL=C sort -z > "$WORK/commit_names.z"
+  LC_ALL=C sort -z "$WORK/index.z" | cmp -s - "$WORK/commit_names.z" || FAILED="$FAILED index-file-list!=commit-file-list"
+else
+  FAILED="$FAILED git-ls-files-failed"
+fi
 [ "${TEST_EXIT:-1}" -eq 0 ] || FAILED="$FAILED make-test(${TEST_EXIT:-?})"
 [ "${ACC_EXIT:-1}" -eq 0 ] || FAILED="$FAILED make-acceptance(${ACC_EXIT:-?})"
 [ "${VAL_EXIT:-1}" -eq 0 ] || FAILED="$FAILED validator(${VAL_EXIT:-?})"
