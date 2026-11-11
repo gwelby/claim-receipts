@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from typing import Any
 
@@ -21,6 +22,9 @@ DEFAULT_DB = os.path.expanduser("~/.hermes/state.db")
 MAX_MESSAGES = 600          # newest N messages considered at session end
 MAX_OUTPUT_CHARS = 20_000   # per tool message, ignored beyond this
 MAX_TOTAL_CHARS = 400_000
+READ_TOOLS = ("read_file",)  # native tools whose subject is an exact `path` argument (C2)
+# Markers the host itself writes when it shortens a tool result before storing it.
+_HOST_TRUNCATION = re.compile(r"\[truncated|output truncated", re.I)
 
 
 def _connect(db_path: str | None = None) -> sqlite3.Connection | None:
@@ -61,16 +65,21 @@ def _call_commands(con: sqlite3.Connection, session_id: str,
                 fid = call.get("call_id") or call.get("id")
                 fn = call.get("function") or {}
                 args = fn.get("arguments")
-                command = None
                 if isinstance(args, str):
                     try:
-                        command = json.loads(args).get("command")
-                    except (json.JSONDecodeError, AttributeError):
-                        command = None
-                elif isinstance(args, dict):
-                    command = args.get("command")
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = None
+                if not isinstance(args, dict):
+                    args = {}
+                command = args.get("command")
+                # C2: a native read's subject is its PATH argument, not a command. Dropping it
+                # made a genuine exact-path read_file indistinguishable from no observation.
+                path = args.get("path")
                 if fid:
-                    calls[fid] = {"name": fn.get("name") or "", "command": command}
+                    calls[fid] = {"name": fn.get("name") or "",
+                                  "command": command if isinstance(command, str) else None,
+                                  "path": path if isinstance(path, str) else None}
         except (json.JSONDecodeError, AttributeError, TypeError):
             continue
     return calls
@@ -78,7 +87,8 @@ def _call_commands(con: sqlite3.Connection, session_id: str,
 
 def read_tool_outputs(session_id: str, db_path: str | None = None,
                       max_messages: int = MAX_MESSAGES) -> list[dict]:
-    """Newest tool results for a session: [{tool, output, command, call_id}].
+    """Newest tool results for a session: [{tool, output, command, path, call_id, exit_code,
+    error, truncated, enveloped, ok}].
 
     `command` is the joined originating command (None when the schema has no
     call linkage or the call is unparseable) — R4's native join. `call_id`
@@ -114,25 +124,51 @@ def read_tool_outputs(session_id: str, db_path: str | None = None,
         if not content:
             continue
         text = content if isinstance(content, str) else str(content)
+        enveloped, exit_code, error, truncated = False, None, False, False
         if text.lstrip().startswith("{"):
-            try:  # Hermes tool content is a JSON envelope: {"output": "..."}
+            try:  # Hermes tool content is a JSON envelope: {"output": "..."} / read_file {"content": ...}
                 envelope = json.loads(text)
-                if isinstance(envelope, dict) and isinstance(envelope.get("output"), str):
-                    text = envelope["output"]
+                if isinstance(envelope, dict):
+                    body = envelope.get("output")
+                    if not isinstance(body, str) and tool_name in READ_TOOLS:
+                        body = envelope.get("content")
+                    if isinstance(body, str):
+                        text, enveloped = body, True
+                        code = envelope.get("exit_code")
+                        exit_code = code if isinstance(code, int) else None
+                        error = bool(envelope.get("error"))
+                        truncated = envelope.get("truncated") is True
+                    elif envelope.get("error"):
+                        error = True
             except json.JSONDecodeError:
                 pass
+        # C2: a cut observation must SAY it was cut. An absence inferred from the first
+        # MAX_OUTPUT_CHARS of a longer listing is an inference from text we never read.
         if len(text) > MAX_OUTPUT_CHARS:
             text = text[:MAX_OUTPUT_CHARS]
+            truncated = True
+        if _HOST_TRUNCATION.search(text):
+            truncated = True                 # the host shortened it before we ever saw it
         total += len(text)
         if total > MAX_TOTAL_CHARS:
             break
         call = calls.get(tool_call_id) or {}
+        # Identity: a call whose function name disagrees with the tool row is not this output's call.
+        if call and tool_name and call.get("name") and call["name"] != tool_name:
+            call = {}
         out.append({
             "tool": tool_name or "",
             "output": text,
             "command": call.get("command"),
+            "path": call.get("path"),
             "call_id": tool_call_id,
-            "ok": None,  # transcript rows carry no exit flag; ledger records do
+            "exit_code": exit_code,
+            "error": error,
+            "truncated": truncated,
+            "enveloped": enveloped,
+            # transcript rows carry an exit flag only inside the envelope; ledger records carry status
+            "ok": (False if (error or (exit_code not in (None, 0)))
+                   else (True if exit_code == 0 else None)),
         })
     return out
 

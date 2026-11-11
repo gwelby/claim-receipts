@@ -152,5 +152,33 @@ outs_min = transcript.read_tool_outputs("s1", db_path=db)
 check("minimal schema -> command None, output intact",
       all(o["command"] is None for o in outs_min) and len(outs_min) == 2)
 
+# ---- 7. C2: the reader says when it cut, and keeps a native read's path ----
+check("per-message cut is FLAGGED, not silent",
+      all(o.get("truncated") for o in big), "truncated flag on every capped output")
+check("uncut output is not flagged", bool(outs) and outs[0].get("truncated") is False)
+rf_db = os.path.join(tmp, "readfile.db")
+con = sqlite3.connect(rf_db)
+con.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, "
+            "content TEXT, tool_name TEXT, tool_call_id TEXT, tool_calls TEXT, timestamp TEXT)")
+con.executemany(
+    "INSERT INTO messages (session_id, role, content, tool_name, tool_call_id, tool_calls, "
+    "timestamp) VALUES (?,?,?,?,?,?,?)", [
+        ("s1", "assistant", None, None, None,
+         _json.dumps([{"id": "rf1", "function": {"name": "read_file",
+                                                 "arguments": _json.dumps({"path": "/w/a.md"})}}]),
+         "t1"),
+        ("s1", "tool", _json.dumps({"content": "1|hello", "total_lines": 1}), "read_file",
+         "rf1", None, "t2"),
+    ])
+con.commit()
+con.close()
+rf = transcript.read_tool_outputs("s1", db_path=rf_db)
+check("read_file call keeps its exact path argument",
+      len(rf) == 1 and rf[0].get("path") == "/w/a.md" and rf[0]["command"] is None,
+      repr(rf and rf[0].get("path")))
+check("read_file {content} envelope unwrapped, no error",
+      len(rf) == 1 and rf[0]["output"] == "1|hello" and rf[0].get("error") is False
+      and rf[0].get("enveloped") is True)
+
 print(f"\n  {len(fails)} failure(s)" if fails else "\n  ok — transcript reads are bounded and fail open")
 sys.exit(1 if fails else 0)
