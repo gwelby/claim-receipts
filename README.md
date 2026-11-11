@@ -86,7 +86,8 @@ We want the cases where it says **backed** and should not. Wrong verdicts become
 
 ## Install
 
-Tested on Hermes Agent v0.23.0.
+Passes `hermes plugins validate` on Hermes Agent v0.23.0. Its hooks are tested against synthetic sessions
+built the way Hermes stores them; it has not yet been run inside a live Hermes session by its authors.
 
 ```bash
 hermes plugins install gwelby/claim-receipts --ref <the 40-character commit in the catalog entry>
