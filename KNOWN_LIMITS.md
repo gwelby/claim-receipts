@@ -52,7 +52,7 @@ All are now answered by abstention, each with a control in `tests/test_hostile_3
 | An "identical" re-run in another folder repaired a failure; a failure on a look-alike path accused | A failure counts only on the exact absolute path (or a path inside it), and only an identical re-run repairs it; other failures abstain (`failure-unbound`) |
 | A coverage figure printed by `printf`/`cat`, matched by file name, or over "both" | Measurements from text-reproducing commands or inline code abstain; a measurement joins only on the exact absolute path; "both" and numerals over a set are aggregate scope and abstain unless the whole set is judged |
 | A listing then a later `touch`, `rm` or `: >` of the target | A listing no longer speaks for a path that a later command names, or a folder above it, a glob, or a command that cannot be read |
-| Day-3 counts could come from another session's receipt; a failed package looked complete | See the package rows below |
+| Day-3 counts could come from another session's receipt; a failed package looked complete | A named session whose receipt is missing, malformed, a symlink, or names another session fails the package; `RECEIPTS_ROOT` is honoured; the package records the receipt's path, sha256 and how it was chosen. With no session named, the newest receipt is still used and the package says so. A failed run leaves a `FAILED` marker and no `MANIFEST.md`; the marker is removed only as the last step of a successful run |
 
 **Narrowed by this round** (a favourable verdict removed): unscoped hedges after terminal-only
 evidence; coverage claims that name no file (production no longer judges them; the fixture passes
@@ -76,6 +76,10 @@ derives it, and a terminal command with a nonzero exit reaches the hook as `stat
 - **Column `ls` output** with a name containing two spaces is not caught.
 - **The text-producer list is a denylist.** An unlisted program whose only job is to print
   "coverage 100%" would still be read as a measurement.
+- **Day-3 counts are bound to a receipt, not to a plugin commit.** A receipt does not record which
+  plugin commit judged it; `package_commit` says only which package carried the counts.
+- **The package records a local path** (`source_receipt_path`, under the home folder). Review it before
+  any package is shared.
 - **The package bundle is created with `--all`.** Which refs go out is a disclosure decision for the release, not made here.
 - **The outward readback** in the generated commands is anonymous `ls-remote` on one ref; no public read has been run.
 - **The transcript join** was checked against Hermes's source and synthetic transcripts, not against a live Hermes host.
