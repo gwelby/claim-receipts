@@ -1,39 +1,52 @@
 # Known limits
 
-Named defects in the receipts plugin, from an independent source/history audit of `803a04e`.
-Status is honest per item: **open** means the defect is real and unfixed. Nothing here is claimed fixed
-because a fix was attempted; it is fixed when a control that can fail proves it.
+Named defects in the claim-receipts plugin, found by independent source audits (Codex) of `803a04e`,
+`f4e205a` and `fdb8f87`. Status is honest per item. A row says **repaired** only when a control that
+fails without the repair exists in `tests/` and passes with it; **credited** means the auditor's
+recheck confirmed it; **narrowed** means a favourable verdict was removed rather than made correct.
 
-| # | Defect | Where | Status |
+## Where this commit stands
+
+The last audit (Codex, 2026-11-09, on `fdb8f87`) said **HOLD** and named six groups, C1 to C6. This
+commit is the return for those six. It has **not** yet been rechecked by Codex. Until it is, every
+"repaired" below is the author's claim with its control, not an auditor's credit.
+
+## Earlier defects (R1–R8)
+
+| # | Defect | Status |
+|---|---|---|
+| R1 | A missing or evicted pre-state was treated as "absent", so an untouched file could be certified as created. | **credited** by Codex on `fdb8f87` (native pre-state handling) |
+| R2 | Sentence-final punctuation broke path binding; the acceptance harness injected scope counts the real path never supplies. | Ordinary period binding **credited**. Count injection remains a fixture-only path, kept separate from native results |
+| R3 | Lifecycle, order and subject were lost; an unrelated write (`report.md.bak`, another folder's `report.md`) could pose as a repair. | Exact-path write join **credited** on `fdb8f87`. The same rule for **commands** is C3 below |
+| R4 | A listing command was treated as a successful absence observation. | Bounded progress credited on `fdb8f87`; the remaining shapes are C2 below |
+| R5 | Hedging alone earned `backed`. | Same as R4: C2 below |
+| R6 | The acceptance bar was printed but not enforced. | Fixed earlier; enforcement of the added regressions is C4 below |
+| R7 | The Day-3 ratio is a verdict share, not a false-positive rate. | **credited** (renamed `unbacked_claim_share`, carries `not_a_false_positive_rate`). No truth labels exist; it must not be quoted as precision |
+| R8 | The package builder could destroy its input; failed checks did not gate. | Early refusals, required-check exits, raw validator logs, `history.txt`, pinned push: **credited** on `fdb8f87`. Immutable binding is C5 below |
+
+## The return for Codex's HOLD on `fdb8f87`
+
+| # | What the audit found | What this commit does | Control (in `tests/`, run by `make test`) |
 |---|---|---|---|
-| R1 | Missing/evicted pre-state is substituted as "absent", so a post hook on an untouched file can record a mutation and the end hook emits `backed` while size and mtime never changed. A creation must not be certified without a captured before-state. | `receipts/ledger.py:85` | **repaired in `c22c103`** — pre-state unknown is no longer invented. Awaiting Codex's second-party recheck. |
-| R2 | Development positives bypass the production binding. `judge.py:63` consumes sentence-final punctuation as part of an absolute path, so a real paired write is `backed` in backticks but `unbacked` as `I created /…/report.md.`. The acceptance harness also injects subject and scope counts that the real receipt path does not supply. | `receipts/judge.py:63`, `tests/test_acceptance.py:34,37`, `receipts/receipt.py:35-39` | partly fixed — README/metadata honesty cut applied; production-path binding **open** |
-| R3 | Observations lose lifecycle, time and subject. A recorded deletion makes "exists" `backed` and an honest "is missing" `contradicted`; an error before a later repair becomes `later-error`; the lowest measurement anywhere in the evidence can contradict a different subject's perfect measurement. | `receipts/judge.py:178,191,232,249-255` | **repaired in `c22c103`** — lifecycle/order/subject preserved. Awaiting Codex's second-party recheck. |
-| R4 | A listing command is treated as a successful absence observation. Listings are inferred from command strings with no result, exit status, depth or completeness check, so an existing file in a successful listing, a permission-denied listing, and merely printing a quoted `ls` can each produce `backed` for "missing". | `receipts/evidence.py:153-171`, `receipts/judge.py:190-209` | **repaired in `5193ff6`** — executed, observed, bounded listings. Awaiting Codex's second-party recheck. |
-| R5 | Hedging alone grants `backed`. The hedge branch returns hedge-matches-scope unconditionally, so a hedged sentence with no search and no observation is backed. | `receipts/judge.py:173-175` | **repaired in `5193ff6`** — hedges are now observed, not assumed. Awaiting Codex's second-party recheck. |
-| R6 | The acceptance bar was printed but not enforced: the CLI exited on `hits >= 7` alone, so a mutant with failed positive controls still exited 0. The bar was also computed inside a verbose-only block, so a non-verbose run never evaluated it. | `tests/test_acceptance.py` | **fixed** — full bar enforced in exit status, `>=2` positive controls required, proven with a mutant that exits 1 where it exited 0 before |
-| R7 | The Day-3 "false-positive rate" is a verdict share without truth labels — it divides the plugin's own `unbacked`+`contradicted` by its own checkable verdicts and cannot distinguish a justified warning from a false alarm. | `scripts/gate_package.sh:89` | **fixed by renaming, not by obtaining labels** — the quantity is now `unbacked_claim_share` and the payload carries `not_a_false_positive_rate`, stating that nothing independently establishes that an unbacked verdict was wrong. Renaming is the honest fix: inventing truth labels would have made the number look like precision it has not earned. |
-| R8 | The gate package builder can destroy its input: it runs an unrestricted `rm -rf "$OUT"` before any cleanliness check, including when `OUT` names the repo. Failed checks are logged but do not gate the final listing. | `scripts/gate_package.sh:17` | **repaired in `a9fcb5f`** — path resolved and refused for empty/root/the repo itself; verified repo-as-OUT and `/` refused. Awaiting Codex's second-party recheck. |
+| C1 | Counts covering the scope returned `backed` before the claim's property was judged: a 53% measurement with counts 2/2 was `backed`. | **Repaired.** Scope counts now only admit a claim; its kind is then judged. One failing member contradicts "all". **Narrowed:** a passing result from one judged subject cannot speak for the whole set, so it abstains (`scope-property-unbound`). The removed `scope-covered` verdict was used by no fixture or production path. | `test_judge_identity.py` |
+| C2 | Native observation overstated what ran and what it covered: default `ls` omits dotfiles, a quoted `; ls` inside `printf` counted as a listing, a reader-truncated listing proved absence, `find` lost locations, repeated listings were merged, unrelated or failed commands backed a hedge, and an exact-path `read_file` lost its subject. | **Repaired**, all 15 of the audit's comparisons within bounds (6 of 15 before). Commands split only on unquoted separators; anything with `$( )`, backticks or unbalanced quotes is not a listing. A listing counts only in a small allowed form (one absolute path, a fixed set of `ls` flags, or `find ROOT [-maxdepth N] [-name P] [-print]`). Dotfiles need `-a`/`-A`. Cut output cannot prove absence. Entries keep full paths; the newest covering listing decides. A hedge needs a successful observation naming the exact subject path. **Narrowed:** `grep -r` omissions and `tree` output no longer prove absence; other `ls` flags, several paths, redirects or extra `find` options make a listing unable to prove absence. | `test_native_observation.py`, `test_transcript.py` |
+| C3 | A successful command that only named the target (`check report.md.bak`, another folder's `report.md`, `printf` of the path) erased a recorded failure. | **Repaired.** A successful command repairs a recorded failure only if it is the identical failing command run again. **Narrowed:** a real repair checked with a *different* command (fails with `pytest`, passes with `python3`) now abstains (`repair-unbound`) instead of being backed. The exact-path write repair is unchanged. | `test_judge_identity.py` |
+| C4 | The acceptance exit enforced the original quota but not the added regressions: two mutants scored 34/35 and exited 0. | **Repaired.** The original-eight rule (7/8 and both positives) is kept, and all 27 added regression cases are each required. "Honest work" counts every case expected `backed`, not names containing a word. The fixture is checked against its recorded hash (that record had been stale since `013dae4`). All three of the audit's mutants now exit 1. | `test_bar_mutants.py` |
+| C5 | Package success was not bound to complete commit bytes: a failed or partial export, a missing checksum, or checks run on changed live files still ended 0. | **Repaired.** The file list comes from the pinned commit; export and hash failures abort; the export must match the commit's files exactly; the checks run inside that export and are re-verified after; at the end the tree, index and bundle must still equal the commit. **Output policy:** only the sanctioned `GATE_PACKAGE` folder is ever replaced; any other existing output path is refused (exit 2), empty or not, and a read error is never taken as "empty". | `test_gate_package_binding.py` |
+| C6 | This file and the README did not match the audit. | This rewrite, and the README's limits section. | — |
 
-## Round-2 recheck residuals (Codex, 2026-11-08, on `f4e205a`)
+## Still open, named
 
-The recheck credited the repairs above and found **three open items — two of them
-new regressions introduced by the round-2 lifecycle repair itself.** That is the
-pattern to weigh: the last repair round fixed things and broke things.
-
-| # | Defect | Where | Status |
-|---|---|---|---|
-| R2-residual | Aggregate-scope admission runs after favorable kind branches. Coverage+scope claim ("All 2 images are full-page") takes a favorable verdict from ONE joined measurement while the scope guard never runs. Bind the full declared scope or abstain. | `receipts/judge.py` (scope guard was at :257, after the coverage return at :192-211) | **repaired on branch `round3-repairs` @ `b97d828`** — scope admission now runs before the kind branches; probe: the exact Codex shape returns UNVERIFIABLE/scope-unbindable, single-subject coverage stays BACKED. Awaiting Codex recheck. |
-| R3-regression-a | The lifecycle join admits unrelated writes: `e["path"]` substring/basename match lets `/other/report.md` or `report.md.bak` pose as a repair of `report.md` and cancel a standing failure → BACKED. | `receipts/judge.py:302-309` | **repaired on `round3-repairs` @ `b97d828`** — writes join only on exact normalized path identity; both hostile shapes now return CONTRADICTED/later-error; the genuine exact-path repair still returns BACKED. Awaiting Codex recheck. |
-| R8-residual | Default cleanup reached `rm`/`mkdir` at :43 before the dirty-tree refusal at :46 — a refused run still destroyed a pre-existing output. Required-check exits (test/acceptance/validator/Day-3) were captured then discarded: failures ended exit 0 with artifacts present. `history.txt` absent from the required list; validator output truncated; hashes taken on the live tree, not an immutable export; outward draft pushed mutable `master` with an unscoped `ls-remote`. | `scripts/gate_package.sh` | **repaired on `round3-repairs` @ `b97d828`** — all refusals precede all deletion; regular-file OUT refused; captured exits gate (stubbed validator → exit 3, was 0); raw validator output; `tree.sha256` hashed from a `git archive` export; push bound to the pinned SHA with scoped verify. Awaiting Codex recheck. |
-
-## What the audit did not do
-
-It did not execute the destructive cases or the live-data package builder, and it did not rewrite
-history. The eight exposed development cases pass 8/8; that is development credit, not held-out
-validation. The private ten-case design remains unrun.
+- **Native case08 stays UNJUDGED** without subject injection, as the audit recorded.
+- **After the newest listing,** a non-listing command (such as `rm`) is not taken into account.
+- **Column `ls` output** splits file names that contain spaces.
+- **The package bundle is created with `--all`.** Which refs go out is a disclosure decision for the release, not made here.
+- **The outward readback** in the generated commands is anonymous `ls-remote` on one ref; no public read has been run.
+- **The transcript join** was checked against Hermes's source and synthetic transcripts, not against a live Hermes host.
+- **The Day-3 share** has no independent truth labels (R7).
+- **No held-out validation.** The cases above are exposed development diagnostics, not an accuracy estimate.
 
 ## How this file is kept honest
 
-Each row names a locator and a status. When a repair lands, the row says so only after a control exists
-that fails without the repair — the same rule R6 was fixed under.
+Each row names its control. When a repair lands, the row says so only after a control exists that
+fails without the repair. A narrowed branch is named as narrowed, with what it now does instead.

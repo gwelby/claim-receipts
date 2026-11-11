@@ -1,8 +1,8 @@
-"""Session summary for `/receipts`.
+"""Session summary for `/claim-receipts`.
 
-DAY 1 SCOPE — this reports EVIDENCE ONLY: the files this session provably changed and the commands
-it ran. It makes no attempt yet to judge the session's claims. Claim reconciliation (backed /
-unbacked / unverifiable) lands on Day 2 and will call into this module.
+This summary reports EVIDENCE ONLY: the files this session provably changed and the commands it ran.
+It does not judge claims; the per-claim verdicts are made at session end (`receipt.py`, `judge.py`)
+and written to the receipt artifact.
 
 Saying which day of work a feature is on, in the code, is deliberate: a summary that quietly implies
 it has checked the claims when it has only listed the evidence would be the plugin committing the

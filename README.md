@@ -9,7 +9,9 @@ That is a mechanism, not an instruction: you cannot write it into a system promp
 "please be honest" produces a per-claim verdict that an outside reader can re-run.
 
 An agent says "done". This plugin records what the session's tools actually did — the file writes and
-command invocations it could observe — and reconciles the session's prose claims against that record.
+command invocations it could observe — and reconciles the claims it recognises in the session's prose
+against that record. Claims are found by a fixed set of patterns (completion, existence, absence,
+currency, coverage, hedges, success); a sentence those patterns do not catch is not judged.
 It compares a claim with evidence. It does not prove the claim true, and it does not authenticate the
 agent: agreement with a capture is not truth.
 
@@ -43,19 +45,25 @@ direction, which is the failure the plugin exists to catch. `contradicted` is no
 
 ## What it does NOT establish — read this before trusting a verdict
 
-These are known, named limits. An independent source audit found them; most are open.
+Known, named limits from independent source audits. Where the plugin cannot support a verdict it
+abstains (`unverifiable`) rather than guess in the flattering direction.
 
 - **Capture is bounded by the hooks.** A change made outside an observed tool call, or by a command the
   hook did not see, is invisible. Absence of evidence here is not evidence of absence.
-- **A missing pre-state is not a creation.** If the snapshot was unavailable, the plugin cannot certify
-  a create — a repair is in progress.
-- **A listing is not an absence proof.** Recording that a command *ran* does not yet establish what it
-  *returned*, or that its scope and depth covered the target. (Open.)
-- **Hedging alone does not earn `backed`.** A claim that only reports the limits of its own search needs
-  its supporting observation. (Open.)
+- **Only recognised claims are judged.** Claims are found by patterns; others are not judged at all.
+- **A missing pre-state is not a creation.** Without a captured before-state, a create is not certified.
+- **A listing proves absence only in a narrow form**: a successful, complete, un-cut `ls` or `find` of
+  one absolute path, in an allowed form. Anything else (other flags, several paths, quoting it cannot
+  read, a cut result) abstains.
+- **A hedge needs its observation**: a successful read or listing naming the exact path. Hedging alone,
+  or a command that merely names a similar file, earns nothing.
+- **A repair must be the same check run again.** A failure followed by a *different* successful command
+  abstains rather than counting as repaired.
+- **"All" is not proved by one.** A coverage claim over a set needs the whole set judged; one passing
+  member abstains.
 - **The Day-3 ratio is a verdict share, not a false-positive rate.** It has no independent truth labels.
-  It must not be quoted as precision. (Open.)
-- **The gate package builder is not yet safe to point at arbitrary paths.** (Open.)
+  It must not be quoted as precision.
+- **No held-out validation.** The test cases are development diagnostics, not an accuracy estimate.
 
 Full itemised list with locators: `KNOWN_LIMITS.md`.
 
