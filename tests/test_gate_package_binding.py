@@ -111,6 +111,7 @@ if name=='make':
     mode=args[0] if args else ''
     p=fenced(Path.cwd()/'tracked.txt')
     if E('MOCK_MAKE_MUTATES')=='1' and mode=='test':write(p,b'checks rewrote the checked bytes\n')
+    if E('MOCK_MAKE_ADDS')=='1' and mode=='test':write(Path.cwd()/'junk_from_tests.txt',b'left behind by the checks\n')
     if E('MOCK_MAKE_TOUCH_LIVE'):write(Path(E('MOCK_MAKE_TOUCH_LIVE')),b'live edit while checks ran\n')
     if E('MOCK_MAKE_KILL_GATE')=='1':
         # an interrupted build: SIGKILL every ancestor that is the gate script (and its subshells) — nothing else
@@ -236,15 +237,27 @@ TRACKED = b"synthetic tracked source\n"
 SECOND = b"synthetic second committed source\n"
 
 
-def seed_receipt(folder, stem, session, backed=2, unbacked=1, contradicted=0, raw=None, mtime=None):
-    """A synthetic receipt in the shape receipts/receipt.py write() produces (only the fields the gate reads)."""
+def seed_receipt(folder, stem, session, backed=2, unbacked=1, contradicted=0, raw=None, mtime=None,
+                 unverifiable=1, verdicts=True):
+    """A synthetic receipt in the shape receipts/receipt.py write() produces (only the fields the gate reads).
+
+    Round 3 (Fable finding 9): judged now counts ALL four verdicts, as receipt.py build() does (judged =
+    len(judged claims); one verdict each, UNVERIFIABLE included). Until 06ac15a this helper wrote
+    judged = backed+unbacked+contradicted next to unverifiable=1 — a shape receipt.py cannot produce, which
+    the gate now refuses. No expected verdict of any row changed; only the synthetic receipt was made
+    internally consistent. verdicts=True also writes the verdict list receipt.py always writes."""
     folder.mkdir(parents=True, exist_ok=True)
     p = folder / f"{stem}.json"
-    data = raw if raw is not None else json.dumps(
-        {"session": session, "generated": "2026-11-10T00:00:00+0000",
-         "claims": {"detected": backed + unbacked + contradicted + 1, "judged": backed + unbacked + contradicted,
-                    "backed": backed, "unbacked": unbacked, "contradicted": contradicted, "unverifiable": 1}},
-        indent=2).encode()
+    judged = backed + unbacked + contradicted + unverifiable
+    body = {"session": session, "generated": "2026-11-10T00:00:00+0000",
+            "claims": {"detected": judged + 1, "judged": judged, "unjudged": 1,
+                       "backed": backed, "unbacked": unbacked, "contradicted": contradicted,
+                       "unverifiable": unverifiable}}
+    if verdicts:
+        body["verdicts"] = [{"verdict": v, "reason": "synthetic", "detail": "", "kind": "k", "claim": "c"}
+                            for v, n in (("BACKED", backed), ("UNBACKED", unbacked), ("CONTRADICTED", contradicted),
+                                         ("UNVERIFIABLE", unverifiable)) for _ in range(n)]
+    data = raw if raw is not None else json.dumps(body, indent=2).encode()
     p.write_bytes(data)
     if mtime is not None:
         os.utime(p, (mtime, mtime))
@@ -625,6 +638,105 @@ check("retained: no receipts at all -> refused, no day3_counts.json", r["exit"] 
       f"exit={r['exit']} {r['stderr'][-200:]}")
 marked_failed(r, "day3 none")
 
+print("\nround 3, Fable finding 10: a file the checks ADD inside the export is detected")
+r = run("checks_add_file", make_adds=1)
+no_harness(r, "checks add file")
+check("make test writes junk_from_tests.txt into the export: exit 3 naming the added file",
+      r["exit"] == 3 and "export-files-added-by-checks" in r["stderr"] and "junk_from_tests.txt" in r["stderr"],
+      f"exit={r['exit']} {r['stderr'][-220:]}")
+marked_failed(r, "checks add file")
+check("checks add file: the reason is recorded in FAILED", "junk_from_tests.txt" in (r["failed_mark"] or ""),
+      (r["failed_mark"] or "")[-160:])
+r = run("checks_add_nothing_two_files", second_file=1)
+no_harness(r, "checks add nothing")
+check("paired positive: two committed files, checks add nothing -> exit 0", r["exit"] == 0, r["stderr"][-300:])
+marked_complete(r, "checks add nothing")
+
+print("\nround 3, Fable finding 9: Day-3 counts must agree with judged and with the receipt's own verdict list")
+
+
+def raw_receipt(session, claims, verdicts=None):
+    body = {"session": session, "generated": "2026-11-10T00:00:00+0000", "claims": claims}
+    if verdicts is not None:
+        body["verdicts"] = verdicts
+    return json.dumps(body).encode()
+
+
+V = lambda name: {"verdict": name, "reason": "synthetic", "claim": "c"}
+DAY3_REFUSE = (
+    # Fable C-b: backed=3 over a list of CONTRADICTED, CONTRADICTED, UNBACKED
+    ("day3_counts_disagree_with_verdicts", "disagree with its own verdict list",
+     {"detected": 3, "judged": 3, "backed": 3, "unbacked": 0, "contradicted": 0, "unverifiable": 0},
+     [V("CONTRADICTED"), V("CONTRADICTED"), V("UNBACKED")]),
+    # Fable C-c: backed=999 with judged=1 (no verdict list at all)
+    ("day3_inflated_backed", "do not add up",
+     {"detected": 1, "judged": 1, "backed": 999, "unbacked": 0, "contradicted": 0, "unverifiable": 0}, None),
+    # the same inflation hidden from the old guard by a missing unverifiable count
+    ("day3_missing_unverifiable", "claims.unverifiable",
+     {"detected": 1, "judged": 1, "backed": 999, "unbacked": 0, "contradicted": 0}, None),
+    ("day3_missing_judged", "claims.judged",
+     {"backed": 1, "unbacked": 0, "contradicted": 0, "unverifiable": 0}, None),
+    ("day3_four_short_of_judged", "do not add up",
+     {"judged": 5, "backed": 1, "unbacked": 1, "contradicted": 0, "unverifiable": 0}, None),
+    ("day3_verdict_list_too_short", "verdicts for claims.judged",
+     {"judged": 2, "backed": 2, "unbacked": 0, "contradicted": 0, "unverifiable": 0}, [V("BACKED")]),
+    ("day3_verdict_unknown_name", "no recognised verdict",
+     {"judged": 1, "backed": 1, "unbacked": 0, "contradicted": 0, "unverifiable": 0}, [V("PROBABLY")]),
+    ("day3_verdicts_not_a_list", "not a list",
+     {"judged": 1, "backed": 1, "unbacked": 0, "contradicted": 0, "unverifiable": 0}, {"BACKED": 1}),
+    ("day3_bool_judged", "claims.judged",
+     {"judged": True, "backed": 1, "unbacked": 0, "contradicted": 0, "unverifiable": 0}, [V("BACKED")]),
+)
+for name, needle, claims, verdicts in DAY3_REFUSE:
+    def seed(root, claims=claims, verdicts=verdicts):
+        seed_receipt(home_rdir(root), "wanted-session", "wanted-session", raw=raw_receipt("wanted-session", claims, verdicts),
+                     mtime=T_NEW)
+        return {"RECEIPTS_SESSION": "wanted-session"}
+    r = run(name, real_day3=seed)
+    no_harness(r, name)
+    check(f"{name}: exit 3, day3(4), reason '{needle}', no day3_counts.json",
+          r["exit"] == 3 and "day3(4)" in r["stderr"] and needle in r["stderr"] and r["day3"] is None,
+          f"exit={r['exit']} {r['stderr'][-240:]}")
+    marked_failed(r, name)
+
+
+def d_consistent_with_list(root):
+    seeded["cons"] = seed_receipt(home_rdir(root), "wanted-session", "wanted-session", backed=2, unbacked=1,
+                                  contradicted=2, unverifiable=3, mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_consistent_with_list", real_day3=d_consistent_with_list)
+no_harness(r, "day3 consistent with list")
+d = r["day3"] or {}
+check("paired positive: counts agree with judged and with the verdict list -> exit 0, recounted, share 60.0",
+      r["exit"] == 0 and d.get("verdicts_recounted") is True and d.get("checkable") == 5
+      and d.get("unbacked_claim_share") == 60.0 and d.get("source_receipt_sha256") == sha_of(seeded["cons"]),
+      f"exit={r['exit']} {({k: d.get(k) for k in ('verdicts_recounted', 'checkable', 'unbacked_claim_share')})} {r['stderr'][-200:]}")
+marked_complete(r, "day3 consistent with list")
+
+
+def d_consistent_no_list(root):
+    seed_receipt(home_rdir(root), "wanted-session", "wanted-session", backed=3, unbacked=0, verdicts=False, mtime=T_NEW)
+    return {"RECEIPTS_SESSION": "wanted-session"}
+r = run("day3_consistent_no_list", real_day3=d_consistent_no_list)
+no_harness(r, "day3 consistent no list")
+d = r["day3"] or {}
+check("paired positive: consistent counts, no verdict list -> exit 0 and verdicts_recounted is false (disclosed)",
+      r["exit"] == 0 and d.get("verdicts_recounted") is False and d.get("counts", {}).get("backed") == 3,
+      f"exit={r['exit']} {d.get('verdicts_recounted')} {r['stderr'][-200:]}")
+
+
+def d_zero_checkable(root):
+    # Fable C-d made consistent: the newest receipt judged one claim, UNVERIFIABLE -> nothing checkable
+    seed_receipt(home_rdir(root), "old", "old", backed=1, unbacked=5, contradicted=3, mtime=T_OLD)
+    seed_receipt(home_rdir(root), "new", "new", backed=0, unbacked=0, contradicted=0, unverifiable=1, mtime=T_NEW)
+    return {}
+r = run("day3_zero_checkable", real_day3=d_zero_checkable)
+no_harness(r, "day3 zero checkable")
+d = r["day3"] or {}
+check("paired positive: newest receipt with 0 checkable (judged=1 UNVERIFIABLE) -> exit 0, share None",
+      r["exit"] == 0 and d.get("session") == "new" and d.get("checkable") == 0 and d.get("unbacked_claim_share") is None,
+      f"exit={r['exit']} {r['stderr'][-200:]}")
+
 print("\nreal git (throwaway repo, no remote; make/hermes/rm/Day-3 intercepted)")
 GIT = shutil.which("git", path="/usr/bin:/bin")
 if not GIT:
@@ -635,7 +747,7 @@ else:
     for tool in ("rm", "make", "hermes", "absolute-python-intercepted"):
         (realbin / tool).symlink_to(MOCKDIR / "mock.py")
 
-    def real(name, touch_live=False):
+    def real(name, touch_live=False, adds=False):
         root = BASE / name
         repo = root / "candidate"
         (repo / "scripts").mkdir(parents=True)
@@ -656,6 +768,8 @@ else:
                "GIT_CONFIG_NOSYSTEM": "1", "PYTHONDONTWRITEBYTECODE": "1"}
         if touch_live:
             env["MOCK_MAKE_TOUCH_LIVE"] = str(repo / "tracked.txt")
+        if adds:
+            env["MOCK_MAKE_ADDS"] = "1"
         out = root / "pkg"
         cp = subprocess.run(["/bin/bash", str(repo / "scripts/gate_package.sh"), str(out)], cwd=repo, env=env,
                             capture_output=True, text=True, timeout=120)
@@ -676,6 +790,12 @@ else:
     cp, out, head, root = real("real_git_live_edit_during_checks", touch_live=True)
     check("real git live edit while checks ran: nonzero", cp.returncode != 0, cp.stderr[-200:])
     check("real git live edit: named as live-tree change", "live-tree-changed-during-build" in cp.stderr, cp.stderr[-200:])
+    cp, out, head, root = real("real_git_checks_add_file", adds=True)
+    check("real git: a file the checks add inside the real export -> exit 3 naming it",
+          cp.returncode == 3 and "export-files-added-by-checks" in cp.stderr and "junk_from_tests.txt" in cp.stderr,
+          f"exit={cp.returncode} {cp.stderr[-220:]}")
+    check("real git checks-add: FAILED marker kept, no MANIFEST.md",
+          (out / "FAILED").is_file() and not (out / "MANIFEST.md").exists())
 
 shutil.rmtree(BASE, ignore_errors=True)
 print(f"\n{'FAIL' if fails else 'ok'} — {fails} failed")

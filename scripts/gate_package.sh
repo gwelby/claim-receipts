@@ -155,6 +155,25 @@ TEST_EXIT=0; ACC_EXIT=0; VAL_EXIT=0
 # the checks must not have changed the bytes they checked (so checked == hashed at the end too)
 ( cd "$EXPORT" && sha256sum -c --quiet --strict -- "$OUT/tree.sha256" ) >"$WORK/recheck.log" 2>&1
 RECHECK_EXIT=$?
+# Round 3, Fable finding 10: `sha256sum -c` only reads the files the sidecar NAMES, so a file the checks
+# ADDED inside the export (a mock `make test` writing junk) went unseen and the run ended 0. Repeat the
+# section-1 enumeration after the checks: the export's non-directory entries must again be exactly the
+# committed file list — same rule (`! -type d`) as before the checks, now compared by NAME, not only by
+# count. An enumeration error is a failure, never "nothing added". Empty directories carry no bytes and are
+# not compared (git cannot commit one, so the list below could not name it either).
+EXPORT_AFTER=""
+printf '%s\0' "${PATHS[@]}" | LC_ALL=C sort -z > "$WORK/commit_names.z" || EXPORT_AFTER="cannot-sort-commit-list"
+if [ -z "$EXPORT_AFTER" ] && find "$EXPORT" -mindepth 1 ! -type d -printf '%P\0' > "$WORK/after.z"; then
+  LC_ALL=C sort -z "$WORK/after.z" > "$WORK/after_sorted.z" || EXPORT_AFTER="cannot-sort-export-list"
+  if [ -z "$EXPORT_AFTER" ] && ! cmp -s "$WORK/after_sorted.z" "$WORK/commit_names.z"; then
+    # name up to five added entries (newline-free: committed names were already refused if they held one)
+    ADDED=$(LC_ALL=C comm -z -23 "$WORK/after_sorted.z" "$WORK/commit_names.z" | tr '\0\n' '\n?' | head -5 | paste -sd, -)
+    NAFTER=$(tr -cd '\0' < "$WORK/after_sorted.z" | wc -c)
+    EXPORT_AFTER="export-holds-${NAFTER}-entries-for-${N}-committed(added:${ADDED:-none})"
+  fi
+elif [ -z "$EXPORT_AFTER" ]; then
+  EXPORT_AFTER="cannot-enumerate-export-after-checks"
+fi
 
 # ---- 3. the Day-3 measurement, with its definition written down ----
 # Round 2, hostile finding 9: 364be5d read a hard-coded ~/.hermes/plugin-data path (ignoring
@@ -228,9 +247,41 @@ if session and d["session"] != session:
 if stem_of(d["session"]) + ".json" != os.path.basename(src):
     refuse(f"receipt file name does not match the session it names ({d['session']!r}): {src}")
 c = d["claims"]
-for k in ("backed", "unbacked", "contradicted"):
+# Round 3, Fable finding 9: the counts were taken on trust. A receipt saying backed=3 over three
+# CONTRADICTED verdicts, or backed=999 with judged=1, ended 0 with a 0.0% share. receipts/receipt.py
+# build() derives every count from ONE verdict list (one verdict per judged claim), so a receipt it wrote
+# satisfies both rules below; anything else is refused, never repaired or re-derived:
+#   * judged and all four verdict counts are non-negative integers, and the four sum to judged
+#   * when the receipt carries its `verdicts` list (receipt.py always writes one), it is a list of objects
+#     whose `verdict` is one of the four names, it has exactly `judged` entries, and recounting it gives
+#     each of the four counts exactly
+# This is internal consistency, not authenticity: a receipt can be edited consistently. The bytes are
+# bound by source_receipt_sha256, and whether the list was present is recorded (verdicts_recounted).
+VERDICT_KEYS = {"BACKED": "backed", "UNBACKED": "unbacked", "CONTRADICTED": "contradicted",
+                "UNVERIFIABLE": "unverifiable"}
+for k in ("judged",) + tuple(VERDICT_KEYS.values()):
     if type(c.get(k)) is not int or c[k] < 0:
-        refuse(f"receipt claims.{k} is not a non-negative integer: {src}")
+        refuse(f"receipt claims.{k} is missing or not a non-negative integer: {src}")
+four = sum(c[k] for k in VERDICT_KEYS.values())
+if four != c["judged"]:
+    refuse(f"receipt counts do not add up: backed+unbacked+contradicted+unverifiable = {four}, "
+           f"claims.judged = {c['judged']}: {src}")
+verdicts_recounted = "verdicts" in d
+if verdicts_recounted:
+    vs = d["verdicts"]
+    if not isinstance(vs, list):
+        refuse(f"receipt verdicts is not a list: {src}")
+    tally = dict.fromkeys(VERDICT_KEYS.values(), 0)
+    for i, v in enumerate(vs):
+        name = v.get("verdict") if isinstance(v, dict) else None
+        if not isinstance(name, str) or name not in VERDICT_KEYS:
+            refuse(f"receipt verdicts[{i}] has no recognised verdict ({name!r}): {src}")
+        tally[VERDICT_KEYS[name]] += 1
+    if len(vs) != c["judged"]:
+        refuse(f"receipt lists {len(vs)} verdicts for claims.judged = {c['judged']}: {src}")
+    wrong = [f"{k}={c[k]} (list has {tally[k]})" for k in VERDICT_KEYS.values() if tally[k] != c[k]]
+    if wrong:
+        refuse(f"receipt counts disagree with its own verdict list: {', '.join(wrong)}: {src}")
 checkable = c["backed"] + c["unbacked"] + c["contradicted"]
 payload = {
     "package_commit": commit,
@@ -256,6 +307,7 @@ payload = {
         "not_a_false_positive_rate": "there are no truth labels here — nothing independently establishes that an UNBACKED or CONTRADICTED verdict was WRONG. This number is the share of checkable claims the tool declined to back; a justified warning and a false alarm are indistinguishable in it. Do not quote it as precision.",
     },
     "counts": c,
+    "verdicts_recounted": verdicts_recounted,
     "checkable": checkable,
     "unbacked_claim_share": round(100 * (c["unbacked"] + c["contradicted"]) / checkable, 1) if checkable else None,
     "gate": {"unbacked_share_threshold": 20, "pivot_share_threshold": 30, "pivot_fired": bool(checkable and
@@ -268,6 +320,9 @@ payload = {
         "a receipt does not record which plugin commit judged it: package_commit names the package these "
         "counts were shipped in, not proof that this commit produced them; source_receipt_sha256 binds the "
         "exact receipt bytes counted",
+        "the counts are checked for internal consistency (the four verdict counts sum to judged; when the "
+        "receipt carries its verdict list, recounting it reproduces every count — see verdicts_recounted); "
+        "a receipt edited consistently passes, so this is not proof the counts are authentic",
     ],
 }
 with open(os.path.join(out, "day3_counts.json"), "w") as fh:
@@ -363,6 +418,7 @@ BUNDLE_HEAD=$(git bundle list-heads "$OUT/history.bundle" 2>/dev/null | awk '$2=
 [ "$BUNDLE_HEAD" = "$COMMIT" ] || MISSING="$MISSING history.bundle(HEAD:${BUNDLE_HEAD:-none}!=COMMIT)"
 FAILED=""
 [ "$RECHECK_EXIT" -eq 0 ] || FAILED="$FAILED export-changed-by-checks($RECHECK_EXIT)"
+[ -z "$EXPORT_AFTER" ] || FAILED="$FAILED export-files-added-by-checks:$EXPORT_AFTER"
 # C5 end guard: the clean-tree precondition must still hold when the package is finished. The checks
 # no longer read live bytes, but a live tree/index/HEAD that moved during the build means the
 # operator's tree is no longer the one packaged — refuse rather than ship an ambiguous package.
