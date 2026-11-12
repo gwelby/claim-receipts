@@ -18,7 +18,6 @@ import re
 import sqlite3
 from typing import Any
 
-DEFAULT_DB = os.path.expanduser("~/.hermes/state.db")
 MAX_MESSAGES = 600          # newest N messages considered at session end
 MAX_OUTPUT_CHARS = 20_000   # per tool message, ignored beyond this
 MAX_TOTAL_CHARS = 400_000
@@ -27,8 +26,15 @@ READ_TOOLS = ("read_file",)  # native tools whose subject is an exact `path` arg
 _HOST_TRUNCATION = re.compile(r"\[truncated|output truncated", re.I)
 
 
+def db_location() -> str:
+    """The ACTIVE profile's session database, resolved on every call (PR #153708):
+    <Hermes home>/state.db, unless RECEIPTS_TRANSCRIPT_DB overrides it."""
+    from . import paths as P
+    return os.environ.get("RECEIPTS_TRANSCRIPT_DB") or os.path.join(P.hermes_home(), "state.db")
+
+
 def _connect(db_path: str | None = None) -> sqlite3.Connection | None:
-    path = db_path or os.environ.get("RECEIPTS_TRANSCRIPT_DB") or DEFAULT_DB
+    path = db_path or db_location()
     if not os.path.isfile(path):
         return None
     try:

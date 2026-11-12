@@ -42,7 +42,8 @@ direction, which is the failure the plugin exists to catch. `contradicted` is no
 - `post_tool_call` re-stats them and records only real changes (create, modify, delete)
 - terminal calls are recorded as **command** evidence — the command string and how it ended — and are
   never inferred as file changes
-- an append-only JSONL ledger per session under `~/.hermes/plugin-data/receipts/sessions/`
+- an append-only JSONL ledger per session under `<Hermes home>/plugin-data/receipts/sessions/`, where
+  `<Hermes home>` is the active profile's home (`hermes_constants.get_hermes_home()`, usually `~/.hermes`), resolved on every call, so each profile keeps its own
 - claim extraction from the assistant's prose, and the four-verdict reconciliation
 - an end-of-session receipt artifact
 
@@ -107,7 +108,8 @@ hermes plugins enable claim-receipts       # hot-loads hooks; no restart needed
 ```
 
 Then `/claim-receipts` in a session lists the evidence recorded so far (verdicts are written to the receipt at
-session end; with no argument it shows the most recently written ledger, which may be another session's). Disable any time with
+session end). On a messaging gateway it shows only the calling chat's own session; in the local CLI, with no
+session known, it shows the newest ledger on the machine and says so. Disable any time with
 `hermes plugins disable claim-receipts`. (The catalog key and the plugin are both `claim-receipts`:
 another plugin already uses the name `receipts`.)
 
@@ -115,7 +117,7 @@ another plugin already uses the name `receipts`.)
 
 Everything stays on your machine. No network calls, no telemetry, no credentials.
 
-**It reads Hermes's own session database**, `~/.hermes/state.db`, at session end, to bind each
+**It reads Hermes's own session database**, `<Hermes home>/state.db` of the active profile, at session end, to bind each
 command's output to the command that produced it. It opens the file read-only (SQLite `mode=ro`),
 reads only the current session's newest messages (at most 600 rows in each of its three queries; each
 tool result capped at 20,000 characters; the agent's own prose is read without a per-message cap), and
@@ -126,7 +128,7 @@ The receipt stores **the sentences of the agent's own prose that it judged** (up
 The ledger records local file paths, sizes and mtimes — **which means it records the names of the files
 you work on** — and it records **the command strings of terminal calls**, which can themselves contain
 paths, arguments and anything you typed on a command line. That is a wider disclosure than "file names".
-Point `RECEIPTS_ROOT` elsewhere, or delete `~/.hermes/plugin-data/receipts/`.
+Point `RECEIPTS_ROOT` elsewhere, or delete `<Hermes home>/plugin-data/receipts/`.
 
 ## Safety
 

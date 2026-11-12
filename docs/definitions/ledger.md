@@ -17,7 +17,8 @@ write it down, but only if they saw it happen. The notebook is the ledger.
 ## The definition
 
 **Where it lives.** `<root>/sessions/<name>.jsonl`. `<root>` is the `RECEIPTS_ROOT` environment
-variable, or `~/.hermes/plugin-data/receipts` when that is unset. `<name>` is the session id, else
+variable, or `<Hermes home>/plugin-data/receipts` when that is unset, where `<Hermes home>` is the active
+profile's home from `hermes_constants.get_hermes_home()`, resolved on every call. `<name>` is the session id, else
 the task id, else `unknown-YYYYMMDD`. Slashes become `_`; only letters, digits and `- _ . |` are kept;
 the name is cut to 120 characters.
 

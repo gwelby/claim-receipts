@@ -28,11 +28,10 @@ _LOCK = threading.Lock()          # post_tool_call fires concurrently on paralle
 _PENDING: dict[str, dict[str, dict]] = {}
 _MAX_PENDING = 512
 
-DEFAULT_ROOT = os.path.join(os.path.expanduser("~"), ".hermes", "plugin-data", "receipts")
-
-
 def root() -> str:
-    return os.environ.get("RECEIPTS_ROOT") or DEFAULT_ROOT
+    """<active profile's Hermes home>/plugin-data/receipts, resolved on every call (PR #153708),
+    unless RECEIPTS_ROOT overrides it."""
+    return os.environ.get("RECEIPTS_ROOT") or os.path.join(P.hermes_home(), "plugin-data", "receipts")
 
 
 def _call_key(task_id: str, session_id: str, tool_call_id: str) -> str:

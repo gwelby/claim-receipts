@@ -208,7 +208,7 @@ def stem_of(sid):
 
 
 env_root = os.environ.get("RECEIPTS_ROOT") or ""          # same rule as receipts/ledger.py root()
-root = env_root or os.path.join(os.path.expanduser("~"), ".hermes", "plugin-data", "receipts")
+root = env_root or os.path.join(os.path.expanduser(os.environ.get("HERMES_HOME") or "~/.hermes"), "plugin-data", "receipts")
 rdir = os.path.join(root, "receipts")
 
 if session:

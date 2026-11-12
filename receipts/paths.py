@@ -22,6 +22,22 @@ WRITE_PATH_TOOLS = frozenset({
 MAX_PATH_LEN = 4096
 
 
+def hermes_home() -> str:
+    """The ACTIVE Hermes profile's home, resolved at call time (never cached at import).
+
+    Inside Hermes this is `hermes_constants.get_hermes_home()`: context-local override, then
+    HERMES_HOME, then the platform default, so a gateway serving several profiles gets each
+    profile's own directory (PR #153708 review). Outside Hermes (tests, scripts) it falls back to
+    HERMES_HOME, then ~/.hermes.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+        return str(get_hermes_home())
+    except Exception:
+        h = os.environ.get("HERMES_HOME", "").strip()
+        return os.path.expanduser(os.path.expandvars(h)) if h else os.path.join(os.path.expanduser("~"), ".hermes")
+
+
 def normalise(path: Any) -> Optional[str]:
     """Absolute, expanded, no trailing-slash games. None when it is not a usable path."""
     if not isinstance(path, str):

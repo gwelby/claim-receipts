@@ -28,13 +28,37 @@ def _ago(mtime_ns: int) -> str:
     return f"{secs/3600:.1f}h"
 
 
-def render_session_summary(session_id: str = "", task_id: str = "") -> str:
+def render_for_command(raw_args: str = "", session_id: str = "", platform: str = "") -> str:
+    """Pick whose ledger `/claim-receipts` may show (PR #153708 review).
+
+    Local CLI (`platform == "cli"`): an explicit session argument, else this session, else the newest
+    ledger on this machine (one user, their own sessions). Any other surface, including an unknown
+    one: only the calling session's own ledger. No fallback, and no reading another session by
+    naming it, so one chat on a gateway can never see another chat's commands or file paths.
+    """
+    asked = (raw_args or "").strip()
+    own = (session_id or "").strip()
+    if (platform or "").strip().lower() == "cli":
+        sid = asked or own
+        if sid and ledger.read_ledger(sid):
+            return render_session_summary(sid)
+        return render_session_summary("", newest_label=True)
+    if asked and asked != own:
+        return "Receipts — this command shows only this chat's own evidence."
+    if not own:
+        return "Receipts — the host did not identify this chat's session, so nothing is shown."
+    return render_session_summary(own)
+
+
+def render_session_summary(session_id: str = "", task_id: str = "", newest_label: bool = False) -> str:
     """Human-readable evidence for one session. Cheap, local, no network."""
     sid = (session_id or "").strip()
     records = ledger.read_ledger(sid, task_id) if sid else ledger.current_session_records()
     if not records:
         return ("Receipts — no evidence recorded yet for this session.\n"
                 "Nothing has been written or run, or the hooks are not loaded.")
+    note = ("(newest ledger on this machine; it may belong to another of your sessions)\n"
+            if newest_label else "")
 
     paths = {}
     unobserved = []
@@ -52,7 +76,7 @@ def render_session_summary(session_id: str = "", task_id: str = "") -> str:
         if cmd:
             commands.append((cmd, rec.get("status")))
 
-    lines = [f"Receipts — {len(paths)} file(s) provably changed, {len(commands)} command(s) run",
+    lines = [f"{note}Receipts — {len(paths)} file(s) provably changed, {len(commands)} command(s) run",
              ""]
     for p, st in sorted(paths.items()):
         size = st.get("size")

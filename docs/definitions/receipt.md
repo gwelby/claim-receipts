@@ -50,7 +50,9 @@ was read), `evidence` (`files_mutated`, and counts of mutations, commands, listi
 
 - **Not the `/claim-receipts` command output.** That command shows evidence only (files changed and
   the last ten commands), and says no claim is judged there. It reads the session named in its
-  argument, or else the most recently written ledger file.
+  argument, or else the most recently written ledger file. On a messaging gateway it reads only the
+  calling chat's own session (no argument naming another session, no newest-file fallback); the
+  argument and the newest-file fallback are for the local CLI only.
 - **Not signed or tamper-evident.** It is a plain file.
 - **Not bound to a plugin version.** A receipt does not record which plugin commit judged it.
   (`KNOWN_LIMITS.md`, "Still open, named".)

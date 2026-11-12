@@ -27,11 +27,16 @@ def _safe(fn, label: str):
     return wrapped
 
 
-def _handle_slash(raw_args: str = "") -> str:
-    """`/claim-receipts` — what this session has proven so far."""
+def _handle_slash(raw_args: str = "", session_id: str = "", platform: str = "", **_: Any) -> str:
+    """`/claim-receipts` — this session's evidence so far.
+
+    Hermes fills `session_id` and `platform` for every surface (PR #153708 review). On a messaging
+    gateway the command shows only the calling chat's own ledger; the newest-ledger fallback and an
+    explicit session argument are for the local CLI only.
+    """
     try:
         from .receipts import claims
-        return claims.render_session_summary(raw_args)
+        return claims.render_for_command(raw_args, session_id, platform)
     except Exception as exc:
         return f"receipts: could not read the ledger ({exc})"
 
