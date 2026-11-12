@@ -171,7 +171,15 @@ a recorded failure on it. A tool call that reports no status counts as succeeded
 | Ledger and transcript paths were fixed to the default profile (`~/.hermes/...`): under another profile, or a gateway serving several, receipts landed in the wrong profile and every claim read "no transcript" | Both come from `hermes_constants.get_hermes_home()`, resolved on every call (`RECEIPTS_ROOT` / `RECEIPTS_TRANSCRIPT_DB` still override) |
 | `/claim-receipts` with no argument showed the newest ledger of any session: on a gateway, one chat could see another chat's commands and file paths | The handler declares `session_id` and `platform`, which Hermes fills in. Off the local CLI it shows only the caller's own session: no newest-file fallback, and naming another session is refused. The fallback and the argument remain for the local CLI |
 
-Adopted as `tests/test_pr153708_profile_and_session.py` (11/11 here; 9 fail on d2e41bb). Not yet done: moving the two
+Codex's check of that fix (632040a) held on two isolation cases, both now closed:
+
+| Codex case | Now |
+|---|---|
+| P1: Hermes's profile resolver present but raising → the fallback (`HERMES_HOME` / `~/.hermes`) could be a different profile, whose evidence was shown and written to | Only a missing resolver (not running inside Hermes) falls back. A resolver that raises makes every path abstain (`ProfileUnresolved`): no read, no write, no receipt; the command says the profile could not be resolved |
+| P2: ledger file names are sanitised and capped at 120 characters, so `chat/A` and `chat_A`, `chat:A` and `chatA`, or two long ids with one prefix share a file, and a chat saw the other's records | Reading a session keeps only records whose stored session id equals the literal id; a record with no stored id abstains. Different ids may still share a file on disk; they are never shown to each other |
+
+**Not covered, stated:** the getter failure was injected in tests (no natural failure was observed); no live gateway was run.
+Adopted as `tests/test_pr153708_profile_and_session.py` (19/19 here; 13 fail on d2e41bb, 8 on 632040a). Not yet done: moving the two
 settings to a plugin `config_schema` (recommended, not blocking).
 
 ## Still open, named

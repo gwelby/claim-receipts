@@ -22,6 +22,10 @@ WRITE_PATH_TOOLS = frozenset({
 MAX_PATH_LEN = 4096
 
 
+class ProfileUnresolved(RuntimeError):
+    """Hermes's profile resolver is present but failed: abstain rather than guess another profile."""
+
+
 def hermes_home() -> str:
     """The ACTIVE Hermes profile's home, resolved at call time (never cached at import).
 
@@ -29,13 +33,23 @@ def hermes_home() -> str:
     HERMES_HOME, then the platform default, so a gateway serving several profiles gets each
     profile's own directory (PR #153708 review). Outside Hermes (tests, scripts) it falls back to
     HERMES_HOME, then ~/.hermes.
+
+    Codex 632040a P1: only a MISSING resolver (ImportError: not running inside Hermes) may fall back.
+    If the resolver exists but raises, the active profile is unknown, and any fallback could be a
+    different profile; raise ProfileUnresolved so every caller abstains (no read, no write).
     """
     try:
         from hermes_constants import get_hermes_home
-        return str(get_hermes_home())
-    except Exception:
+    except ImportError:
         h = os.environ.get("HERMES_HOME", "").strip()
         return os.path.expanduser(os.path.expandvars(h)) if h else os.path.join(os.path.expanduser("~"), ".hermes")
+    try:
+        home = get_hermes_home()
+    except Exception as exc:
+        raise ProfileUnresolved(f"active Hermes profile could not be resolved: {exc}") from exc
+    if not home:
+        raise ProfileUnresolved("active Hermes profile resolved to nothing")
+    return str(home)
 
 
 def normalise(path: Any) -> Optional[str]:

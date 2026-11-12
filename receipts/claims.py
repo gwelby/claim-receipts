@@ -38,6 +38,10 @@ def render_for_command(raw_args: str = "", session_id: str = "", platform: str =
     """
     asked = (raw_args or "").strip()
     own = (session_id or "").strip()
+    try:
+        ledger.root()
+    except Exception:                       # Codex 632040a P1: active profile unknown → abstain, say why
+        return "Receipts — the active Hermes profile could not be resolved, so nothing is shown."
     if (platform or "").strip().lower() == "cli":
         sid = asked or own
         if sid and ledger.read_ledger(sid):

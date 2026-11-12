@@ -12,6 +12,7 @@ Run against d2e41bb this test must fail (old handler ignores the session; old pa
 """
 import importlib.util
 import inspect
+import json
 import os
 import pathlib
 import sys
@@ -102,6 +103,54 @@ check("local CLI with no session: newest ledger fallback kept, and labelled",
       "SECRET_OF_B" in out and "newest ledger" in out, out.splitlines()[0][:70])
 out = invoke(plugin._handle_slash, "chat-A", session_id="", **cli)
 check("local CLI naming a session: that session", "SECRET_OF_A" in out and "SECRET_OF_B" not in out)
+
+print("\n3 — Codex 632040a P2: literal session identity survives the filename")
+fake.HOME = TMP / "alias-profile"
+pairs = [("slash", "chat/A", "chat_A"), ("colon", "chat:A", "chatA"),
+         ("prefix120", "s" * 120 + "-caller", "s" * 120 + "-other")]
+for label, caller, other in pairs:
+    same = ledger.session_file(caller) == ledger.session_file(other)
+    record(other, f"echo OTHER_{label.upper()}")
+    record(caller, f"echo MINE_{label.upper()}")
+    out = invoke(plugin._handle_slash, "", session_id=caller, **gw)
+    check(f"{label}: ids share a file ({same}); caller sees only its own record",
+          f"MINE_{label.upper()}" in out and f"OTHER_{label.upper()}" not in out, out.splitlines()[0][:50])
+legacy = ledger.session_file("legacy-chat")
+os.makedirs(os.path.dirname(legacy), exist_ok=True)
+with open(legacy, "a") as fh:
+    fh.write(json.dumps({"tool": "terminal", "status": "ok", "command": "echo LEGACY_NO_ID", "mutations": []}) + "\n")
+out = invoke(plugin._handle_slash, "", session_id="legacy-chat", **gw)
+check("a record with no stored session id abstains (not shown)", "LEGACY_NO_ID" not in out, out[:60])
+
+print("\n4 — Codex 632040a P1: a failing resolver must not select another profile")
+prof_a = TMP / "fallback-A"
+os.environ["HERMES_HOME"] = str(prof_a)
+fake.HOME = prof_a
+record("chat-P1", "echo PROFILE_A_ONLY")
+db_a = prof_a / "state.db"
+db_a.write_bytes(b"")
+def boom():
+    raise RuntimeError("resolver failed")
+good = fake.get_hermes_home
+fake.get_hermes_home = boom                      # the active profile is now unknown; HERMES_HOME still names A
+out = invoke(plugin._handle_slash, "", session_id="chat-P1", **gw)
+check("resolver raising: the command shows no profile-A evidence, and says why",
+      "PROFILE_A_ONLY" not in out and "could not be resolved" in out, out[:70])
+try:
+    r = ledger.root(); check("resolver raising: ledger root abstains", False, r)
+except Exception as exc:
+    check("resolver raising: ledger root abstains", "ProfileUnresolved" in type(exc).__name__, type(exc).__name__)
+try:
+    d = transcript.db_location(); check("resolver raising: transcript DB abstains (no profile-A DB)", False, d)
+except Exception as exc:
+    check("resolver raising: transcript DB abstains (no profile-A DB)", True, type(exc).__name__)
+receipts_before = sorted(p.name for p in prof_a.rglob("*") if p.is_file())
+plugin._session_end(session_id="chat-P1")
+receipts_after = sorted(p.name for p in prof_a.rglob("*") if p.is_file())
+check("resolver raising: session end writes nothing under profile A", receipts_before == receipts_after,
+      f"{len(receipts_before)} -> {len(receipts_after)} files")
+fake.get_hermes_home = good
+os.environ.pop("HERMES_HOME", None)
 
 print(f"\n  {len(fails)} failure(s)" if fails else "\n  ok — profile paths per call; gateway sees only its own chat")
 sys.exit(1 if fails else 0)

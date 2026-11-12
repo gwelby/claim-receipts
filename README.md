@@ -108,8 +108,8 @@ hermes plugins enable claim-receipts       # hot-loads hooks; no restart needed
 ```
 
 Then `/claim-receipts` in a session lists the evidence recorded so far (verdicts are written to the receipt at
-session end). On a messaging gateway it shows only the calling chat's own session; in the local CLI, with no
-session known, it shows the newest ledger on the machine and says so. Disable any time with
+session end). On a messaging gateway it shows only the calling chat's own session; in the local CLI, when no session
+is given or the selected session has no records, it shows the newest ledger on the machine and says so. Disable any time with
 `hermes plugins disable claim-receipts`. (The catalog key and the plugin are both `claim-receipts`:
 another plugin already uses the name `receipts`.)
 

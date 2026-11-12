@@ -132,9 +132,28 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
 
 
 def read_ledger(session_id: str, task_id: str = "") -> list[dict]:
-    """Every evidence record for a session, oldest first. Unreadable lines are skipped, not fatal."""
+    """Every evidence record for a session, oldest first. Unreadable lines are skipped, not fatal.
+
+    Codex 632040a P2: file names are sanitised and capped, so different literal ids can share a file.
+    Only records whose STORED identity equals the literal id asked for are returned (session id when
+    given, else task id). A record without that stored field (legacy) abstains: it is not returned.
+    """
+    sid = session_id or ""
+    tid = task_id or ""
+    if not sid and not tid:
+        return []
     try:
-        path = session_file(session_id, task_id)
+        recs = _read_file(session_file(session_id, task_id))
+    except Exception:
+        return []
+    if sid:
+        return [r for r in recs if isinstance(r, dict) and r.get("session_id") == sid]
+    return [r for r in recs if isinstance(r, dict) and not r.get("session_id") and r.get("task_id") == tid]
+
+
+def _read_file(path: str) -> list[dict]:
+    """Every parseable record in one ledger file, oldest first, with no identity filter."""
+    try:
         if not os.path.isfile(path):
             return []
         out = []
@@ -177,7 +196,7 @@ def current_session_records() -> list[dict]:
         if not files:
             return []
         newest = max(files, key=os.path.getmtime)
-        return read_ledger(os.path.basename(newest)[:-6])
+        return _read_file(newest)          # local-CLI fallback only, labelled by the caller
     except Exception:
         return []
 
