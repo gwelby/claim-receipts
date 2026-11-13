@@ -128,6 +128,14 @@ The receipt stores **the sentences of the agent's own prose that it judged** (up
 The ledger records local file paths, sizes and mtimes — **which means it records the names of the files
 you work on** — and it records **the command strings of terminal calls**, which can themselves contain
 paths, arguments and anything you typed on a command line. That is a wider disclosure than "file names".
+
+**Credential values are redacted before storage** (since 0.1.1): an auth header, a `NAME=value`
+assignment whose name looks like a credential, a `--password=…`-style flag, a known token prefix, or a
+URL password is replaced with `[REDACTED]` in the stored text. The exact original is kept only as a
+SHA-256 digest, because the re-run repair rule needs command identity. The pattern list is a denylist —
+a credential in an unlisted shape is still stored as typed — and **ledgers written before 0.1.1 are
+not rewritten**. See `KNOWN_LIMITS.md`, "Secret redaction in command evidence".
+
 Point `RECEIPTS_ROOT` elsewhere, or delete `<Hermes home>/plugin-data/receipts/`.
 
 ## Safety

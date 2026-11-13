@@ -1,5 +1,5 @@
 name: claim-receipts
-version: "0.1.0"
+version: "0.1.1"
 description: "Evidence for agent sessions. Records the file changes and command invocations a session's hooks could observe, then reconciles the session's prose claims against that record. Four verdicts per claim: backed, unbacked, unverifiable, contradicted. Compares a claim with a capture; does not prove the claim true. Known limits in KNOWN_LIMITS.md. Local-only, no network, fail-open."
 author: "Greg Welby and Hermes"
 license: "MIT"

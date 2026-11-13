@@ -209,6 +209,42 @@ settings to a plugin `config_schema` (recommended, not blocking).
 - **The Day-3 share** has no independent truth labels (R7).
 - **No held-out validation.** The cases above are exposed development diagnostics, not an accuracy estimate.
 
+## Secret redaction in command evidence (2026-11-12, not yet audited)
+
+**The defect, measured on `46421a8` — the commit in PR #153708.** A terminal call's command text was
+stored verbatim (`command = cmd.strip()[:2000]`). A command carrying a credential
+(`export GITHUB_TOKEN=…`, `curl -H "Authorization: Bearer …"`, `--password=…`) therefore wrote that
+credential into a plaintext JSONL file under the plugin data dir, where it outlives the session.
+Verified: on `46421a8` a token typed into a terminal call appears verbatim in the ledger and no digest
+field exists. The README did disclose that command strings are recorded and "can themselves contain paths,
+arguments and anything you typed" — that warning was honest. What no document said is that no
+redaction existed, so a credential in that text was persisted as typed.
+
+**Why the obvious fix is wrong.** Identity for the re-run repair rule (`judge._same_check`) is decided
+by command TEXT. Redact the text alone and `Authorization: Bearer AAA` becomes identical to
+`… BBB`, so a different command could pose as the identical failing check re-run — the C3 failure
+several audit rounds were spent closing.
+
+**The repair.** `receipts/redact.py` redacts credential *values* only; `ledger.py` stores the redacted
+display string **plus** `command_sha256`, a digest of the exact original; `judge._same_check` compares
+digests when both records carry one, compares text only when neither does (legacy pair), and abstains
+when exactly one does, because the redacted side may be hiding the difference.
+
+**Control:** `tests/test_redaction_identity.py` — 21 checks, including negatives that ordinary
+commands and filenames (`tokenizer_test.py`, `find … -name '*.py'`, `grep -q good report.md`) are NOT
+redacted. Fails on `46421a8` for the right reason (the secret reaches the ledger). The sealed
+acceptance set is unchanged: `make acceptance` 35/35, `make test` exit 0.
+
+**What it does not fix.**
+- **Existing ledgers keep their secrets.** This applies to records written from here on; nothing
+  rewrites history. A ledger written before this change still contains what was typed.
+- **The pattern list is a denylist.** A credential in a shape not listed — a bare random string after
+  `curl --data`, a secret passed positionally — is stored as typed.
+- **Digest equality is a small side channel.** Two sessions that ran the identical command share a
+  digest. It reveals sameness, not content; for a short, guessable command it is brute-forceable.
+- **A redacted value cannot be re-derived**, so a verdict that turned on the secret's exact text now
+  reads a redaction instead. That is the intended trade: a missed verdict over a leaked key.
+
 ## How this file is kept honest
 
 Each row names its control. When a repair lands, the row says so only after a control exists that
