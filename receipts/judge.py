@@ -494,7 +494,17 @@ def _same_check(e: dict, standing: dict) -> bool:
     ca, cb = e.get("cmd") or "", standing.get("cmd") or ""
     if len(ca) >= _LEDGER_COMMAND_CAP or len(cb) >= _LEDGER_COMMAND_CAP:
         return False                              # may have been cut by the ledger
-    return ca == cb
+    # Redaction keeps secrets out of the ledger text, so text alone can no longer decide identity:
+    # two commands differing only in a credential now read the same. The digest is over the exact
+    # original, so it is the honest comparison when both sides have one.
+    da, db = e.get("cmd_sha256"), standing.get("cmd_sha256")
+    if da and db:
+        return da == db
+    if bool(da) != bool(db):
+        # One side is redacted and the other is not. Their texts are not comparable — the redacted
+        # side may be hiding exactly the difference this check exists to detect. Abstain.
+        return False
+    return ca == cb                               # legacy pair, both raw text
 
 
 # ledger.py stores at most this many characters of a command (see post_tool_call).

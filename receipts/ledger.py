@@ -18,6 +18,7 @@ import time
 from typing import Any, Optional
 
 from . import paths as P
+from . import redact as R
 
 # Longest working folder the ledger stores; a longer one is flagged cwd_cut (Codex 4ea2e11).
 _CWD_CAP = 1000
@@ -99,14 +100,21 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
         # Terminal calls carry no reliable path prediction, so they are recorded as command
         # evidence instead: what ran, and how it ended. Never inferred as a file change.
         command = None
+        command_sha256 = None
         cut = False
         cwd = None
         cwd_cut = False
         if tool_name == "terminal" and isinstance(args, dict):
             cmd = args.get("command")
             if isinstance(cmd, str) and cmd.strip():
-                command = cmd.strip()[:2000]
-                cut = len(cmd.strip()) > 2000      # stored cut: two such commands may differ after it
+                raw = cmd.strip()
+                # Secrets must not reach disk: the stored text is redacted, the identity is kept as
+                # a digest of the exact original (see receipts/redact.py). Both are needed — text
+                # alone would put `Bearer abc` in a plaintext ledger, and a redacted text alone
+                # would make two different commands look identical to judge._same_check.
+                command = R.redact_command(raw)[:2000]
+                command_sha256 = R.command_digest(raw)
+                cut = len(raw) > 2000      # stored cut: two such commands may differ after it
             # Codex 2358d20 R1: the same command text run from another folder is another check
             # (a different check.py). Keep the folder when the host passes one; it is compared
             # before a re-run may count as a repair.
@@ -125,7 +133,8 @@ def post_tool_call(tool_name: str = "", args: Any = None, result: Any = None,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "session_id": session_id, "task_id": task_id, "tool_call_id": tool_call_id,
             "tool": tool_name, "status": status, "duration_ms": duration_ms,
-            "mutations": mutations, "command": command, "cwd": cwd, "cwd_cut": cwd_cut, "command_cut": cut,
+            "mutations": mutations, "command": command, "command_sha256": command_sha256,
+            "cwd": cwd, "cwd_cut": cwd_cut, "command_cut": cut,
         })
     except Exception:
         return
